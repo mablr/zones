@@ -6,9 +6,13 @@ pragma solidity ^0.8.13;
 interface IZoneToken {
 
     function mint(address to, uint256 amount) external;
+
     function burn(uint256 amount) external;
+
     function transfer(address to, uint256 amount) external returns (bool);
+
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
+
     function balanceOf(address account) external view returns (uint256);
 
 }
@@ -24,6 +28,7 @@ struct ZoneInfo {
     bytes32 genesisBlockHash;
     bytes32 genesisTempoBlockHash;
     uint64 genesisTempoBlockNumber;
+    string rpcUrl;
 }
 
 /// @notice Zone creation parameters stored in genesis
@@ -432,6 +437,7 @@ interface IZoneFactory {
         address sequencer;
         address verifier;
         ZoneParams zoneParams;
+        string rpcUrl;
     }
 
     event ZoneCreated(
@@ -569,6 +575,9 @@ interface IZonePortal {
     /// @notice Emitted when sequencer resumes deposits for a token
     event DepositsResumed(address indexed token);
 
+    /// @notice Emitted when the sequencer updates the zone's public RPC endpoint
+    event RpcUrlUpdated(string rpcUrl);
+
     error NotSequencer();
     error NotPendingSequencer();
     error InvalidProof();
@@ -598,17 +607,29 @@ interface IZonePortal {
     function MAX_GAS_FEE_RATE() external view returns (uint128);
 
     function zoneId() external view returns (uint32);
+
     function messenger() external view returns (address);
+
     function sequencer() external view returns (address);
+
     function pendingSequencer() external view returns (address);
+
     function zoneGasRate() external view returns (uint128);
+
     function verifier() external view returns (address);
+
     function withdrawalBatchIndex() external view returns (uint64);
+
     function blockHash() external view returns (bytes32);
+
     function currentDepositQueueHash() external view returns (bytes32);
+
     function lastSyncedTempoBlockNumber() external view returns (uint64);
+
     function withdrawalQueueHead() external view returns (uint256);
+
     function withdrawalQueueTail() external view returns (uint256);
+
     function withdrawalQueueSlot(uint256 slot) external view returns (bytes32);
 
     function genesisTempoBlockNumber() external view returns (uint64);
@@ -643,6 +664,14 @@ interface IZonePortal {
 
     /// @notice Resume deposits for a token. Only callable by sequencer.
     function resumeDeposits(address token) external;
+
+    /// @notice The zone's public RPC endpoint
+    /// @return The stored RPC URL, or empty string if unset
+    function rpcUrl() external view returns (string memory);
+
+    /// @notice Update the zone's public RPC endpoint. Only callable by sequencer.
+    /// @param rpcUrl The new RPC URL (may be empty to clear it)
+    function setRpcUrl(string calldata rpcUrl) external;
 
     /// @notice Start a sequencer transfer. Only callable by current sequencer.
     /// @param newSequencer The address that will become sequencer after accepting.
@@ -739,6 +768,7 @@ interface IZonePortal {
         returns (bytes32 newCurrentDepositQueueHash);
 
     function processWithdrawal(Withdrawal calldata withdrawal, bytes32 remainingQueue) external;
+
     function submitBatch(
         uint64 tempoBlockNumber,
         uint64 recentTempoBlockNumber,
@@ -824,19 +854,30 @@ interface ITempoState {
 
     // Tempo wrapper fields
     function generalGasLimit() external view returns (uint64);
+
     function sharedGasLimit() external view returns (uint64);
 
     // Inner Ethereum header fields
     function tempoParentHash() external view returns (bytes32);
+
     function tempoBeneficiary() external view returns (address);
+
     function tempoStateRoot() external view returns (bytes32);
+
     function tempoTransactionsRoot() external view returns (bytes32);
+
     function tempoReceiptsRoot() external view returns (bytes32);
+
     function tempoBlockNumber() external view returns (uint64);
+
     function tempoGasLimit() external view returns (uint64);
+
     function tempoGasUsed() external view returns (uint64);
+
     function tempoTimestamp() external view returns (uint64);
+
     function tempoTimestampMillis() external view returns (uint64);
+
     function tempoPrevRandao() external view returns (bytes32);
 
     /// @notice Finalize a Tempo block header. Only callable by ZoneInbox.
@@ -903,6 +944,7 @@ interface IZoneInbox {
     error MissingDecryptionData();
     error ExtraDecryptionData();
     error InvalidSharedSecretProof();
+
     /// @notice Zone configuration (reads sequencer from L1)
     function config() external view returns (IZoneConfig);
 

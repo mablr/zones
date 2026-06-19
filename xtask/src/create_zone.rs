@@ -33,6 +33,7 @@ sol! {
         address sequencer;
         address verifier;
         ZoneParams zoneParams;
+        string rpcUrl;
     }
 
     #[sol(rpc)]
@@ -77,6 +78,11 @@ pub(crate) struct CreateZone {
     /// Sequencer address that will operate the zone.
     #[arg(long)]
     sequencer: Address,
+
+    /// Public RPC endpoint for the zone, published on-chain in the portal.
+    /// Can be left empty and set later via `ZonePortal.setRpcUrl`.
+    #[arg(long, default_value = "")]
+    rpc_url: String,
 
     /// Private key (hex) for signing the createZone transaction on L1.
     #[arg(long)]
@@ -128,6 +134,7 @@ impl CreateZone {
                 genesisTempoBlockHash: B256::ZERO,
                 genesisTempoBlockNumber: current_block,
             },
+            rpcUrl: self.rpc_url.clone(),
         };
 
         println!(
@@ -208,6 +215,7 @@ impl CreateZone {
             "sequencer": format!("{}", self.sequencer),
             "tempoAnchorBlock": confirm_header.inner.number,
             "zoneFactory": format!("{}", self.zone_factory),
+            "rpcUrl": self.rpc_url,
         });
         let zone_json_path = self.output.join("zone.json");
         std::fs::write(
@@ -223,6 +231,9 @@ impl CreateZone {
         println!("  Initial Token: {}", self.initial_token);
         println!("  Sequencer: {}", self.sequencer);
         println!("  ZoneFactory: {}", self.zone_factory);
+        if !self.rpc_url.is_empty() {
+            println!("  RPC URL: {}", self.rpc_url);
+        }
         println!("  Tempo anchor block: {}", confirm_header.inner.number);
         println!(
             "  Genesis written to: {}",

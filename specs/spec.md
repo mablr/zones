@@ -173,12 +173,14 @@ Each zone has two privileged roles registered on the [`ZonePortal`](#izoneportal
 ### Roles
 
 **Admin.**
+
 - Holds governance powers over the zone (token enablement, deposit pause/resume).
 - Expected to be a cold key, multisig, or governance contract.
 - Set at zone creation via [`IZoneFactory.createZone`](#izonefactory).
 - Cannot be renounced. The zero address is never a valid admin.
 
 **Sequencer.**
+
 - Operates the zone: collects transactions, produces blocks, advances Tempo, processes deposits and withdrawals, and submits batches with proofs.
 - Expected to be an online operational key.
 - Set at zone creation via [`IZoneFactory.createZone`](#izonefactory).
@@ -198,6 +200,7 @@ The following table lists every privileged action and the role authorized to inv
 | `setZoneGasRate(rate)` | [`ZonePortal`](#izoneportal) | **sequencer** |
 | `setTempoGasRate(rate)` | [`ZonePortal`](#izoneportal) | **sequencer** |
 | `setSequencerEncryptionKey(...)` | [`ZonePortal`](#izoneportal) | **sequencer** |
+| `setRpcUrl(url)` | [`ZonePortal`](#izoneportal) | **sequencer** |
 | `submitBatch(...)` | [`ZonePortal`](#izoneportal) | **sequencer** |
 | `processWithdrawal(...)` | [`ZonePortal`](#izoneportal) | **sequencer** |
 | `finalizeWithdrawalBatch(...)` | [`ZoneOutbox`](#izoneoutbox) (zone-side) | **sequencer** (block beneficiary) |
@@ -1570,6 +1573,12 @@ interface IZonePortal {
     function areDepositsActive(address token) external view returns (bool);
     function enabledTokenCount() external view returns (uint256);
     function enabledTokenAt(uint256 index) external view returns (address);
+
+    // Zone RPC endpoint 
+    // Published on-chain so clients can discover how to reach the zone
+    event RpcUrlUpdated(string rpcUrl);
+    function rpcUrl() external view returns (string memory);
+    function setRpcUrl(string calldata rpcUrl) external; // sequencer-only
 
     // Deposits
     /// @dev Reverts (`MissingBouncebackRecipient`) if `bouncebackRecipient == address(0)`.

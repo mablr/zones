@@ -168,7 +168,8 @@ contract ZonePortalTest is BaseTest {
                 genesisBlockHash: GENESIS_BLOCK_HASH,
                 genesisTempoBlockHash: GENESIS_TEMPO_BLOCK_HASH,
                 genesisTempoBlockNumber: genesisTempoBlockNumber
-            })
+            }),
+            rpcUrl: "https://rpc.test-zone.example"
         });
 
         address portalAddr;
@@ -340,8 +341,9 @@ contract ZonePortalTest is BaseTest {
             admin, ITIP403Registry.PolicyType.WHITELIST, mintRecipientAccounts
         );
 
-        uint64 compoundPolicyId =
-            registry.createCompoundPolicy(senderPolicyId, recipientPolicyId, mintRecipientPolicyId);
+        uint64 compoundPolicyId = registry.createCompoundPolicy(
+            senderPolicyId, recipientPolicyId, mintRecipientPolicyId
+        );
         vm.prank(pathUSDAdmin);
         pathUSD.changeTransferPolicyId(compoundPolicyId);
 
@@ -376,8 +378,9 @@ contract ZonePortalTest is BaseTest {
             admin, ITIP403Registry.PolicyType.WHITELIST, mintRecipientAccounts
         );
 
-        uint64 compoundPolicyId =
-            registry.createCompoundPolicy(senderPolicyId, recipientPolicyId, mintRecipientPolicyId);
+        uint64 compoundPolicyId = registry.createCompoundPolicy(
+            senderPolicyId, recipientPolicyId, mintRecipientPolicyId
+        );
         vm.prank(pathUSDAdmin);
         pathUSD.changeTransferPolicyId(compoundPolicyId);
 
@@ -2315,6 +2318,34 @@ contract ZonePortalTest is BaseTest {
         );
         portal.depositEncrypted(address(pathUSD), 1000e6, 0, payload);
         vm.stopPrank();
+    }
+
+    function test_rpcUrl_setAtCreation() public view {
+        // setUp() created the zone with this RPC URL
+        assertEq(
+            portal.rpcUrl(), "https://rpc.test-zone.example", "rpcUrl should be set at creation"
+        );
+    }
+
+    function test_setRpcUrl_updates() public {
+        string memory url = "https://rpc.new-endpoint.example";
+
+        vm.expectEmit(false, false, false, true, address(portal));
+        emit IZonePortal.RpcUrlUpdated(url);
+        portal.setRpcUrl(url);
+
+        assertEq(portal.rpcUrl(), url, "rpcUrl() mismatch after update");
+    }
+
+    function test_setRpcUrl_clearByEmptyValue() public {
+        portal.setRpcUrl("");
+        assertEq(bytes(portal.rpcUrl()).length, 0, "empty value should clear rpcUrl");
+    }
+
+    function test_setRpcUrl_revertsIfNotSequencer() public {
+        vm.prank(alice); // Not sequencer
+        vm.expectRevert(IZonePortal.NotSequencer.selector);
+        portal.setRpcUrl("https://rpc.example");
     }
 
     /*//////////////////////////////////////////////////////////////

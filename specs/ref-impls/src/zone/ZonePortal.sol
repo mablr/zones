@@ -108,6 +108,9 @@ contract ZonePortal is IZonePortal {
     /// @notice Withdrawal queue (zone→Tempo): fixed-size ring buffer
     WithdrawalQueue internal _withdrawalQueue;
 
+    /// @notice Public RPC endpoint for the zone
+    string public rpcUrl;
+
     /*//////////////////////////////////////////////////////////////
                               CONSTRUCTOR
     //////////////////////////////////////////////////////////////*/
@@ -119,7 +122,8 @@ contract ZonePortal is IZonePortal {
         address _sequencer,
         address _verifier,
         bytes32 _genesisBlockHash,
-        uint64 _genesisTempoBlockNumber
+        uint64 _genesisTempoBlockNumber,
+        string memory _rpcUrl
     ) {
         zoneId = _zoneId;
         messenger = _messenger;
@@ -127,6 +131,7 @@ contract ZonePortal is IZonePortal {
         verifier = _verifier;
         blockHash = _genesisBlockHash;
         genesisTempoBlockNumber = _genesisTempoBlockNumber;
+        rpcUrl = _rpcUrl;
 
         // Enable the initial token
         _enableTokenInternal(_initialToken);
@@ -260,6 +265,13 @@ contract ZonePortal is IZonePortal {
         emit TokenEnabled(_token, name, symbol, currency);
     }
 
+    /// @notice Update the zone's public RPC endpoint.
+    /// @param _rpcUrl The new RPC url
+    function setRpcUrl(string calldata _rpcUrl) external onlySequencer {
+        rpcUrl = _rpcUrl;
+        emit RpcUrlUpdated(_rpcUrl);
+    }
+
     /*//////////////////////////////////////////////////////////////
                         ENCRYPTION KEY MANAGEMENT
     //////////////////////////////////////////////////////////////*/
@@ -303,7 +315,9 @@ contract ZonePortal is IZonePortal {
         bytes32 message = keccak256(abi.encode(address(this), x, yParity));
         address recovered = ecrecover(message, popV, popR, popS);
         address expected = _deriveAddressFromPubKey(x, yParity);
-        if (recovered == address(0) || recovered != expected) revert InvalidProofOfPossession();
+        if (recovered == address(0) || recovered != expected) {
+            revert InvalidProofOfPossession();
+        }
 
         uint64 activationBlock = uint64(block.number);
         _encryptionKeys.push(
@@ -562,7 +576,9 @@ contract ZonePortal is IZonePortal {
         if (encrypted.ephemeralPubkeyYParity != 0x02 && encrypted.ephemeralPubkeyYParity != 0x03) {
             revert InvalidEphemeralPubkey();
         }
-        if (!_isValidSecp256k1X(encrypted.ephemeralPubkeyX)) revert InvalidEphemeralPubkey();
+        if (!_isValidSecp256k1X(encrypted.ephemeralPubkeyX)) {
+            revert InvalidEphemeralPubkey();
+        }
 
         // Validate ciphertext length — GCM ciphertext == plaintext length (tag is separate)
         // Prevents DoS: oversized ciphertexts inflate zone-side AES-GCM processing cost
@@ -744,7 +760,9 @@ contract ZonePortal is IZonePortal {
         }
 
         // Validate tempoBlockNumber is valid (applies to both direct and ancestry modes)
-        if (tempoBlockNumber < genesisTempoBlockNumber) revert InvalidTempoBlockNumber();
+        if (tempoBlockNumber < genesisTempoBlockNumber) {
+            revert InvalidTempoBlockNumber();
+        }
 
         // Determine anchor block: either tempoBlockNumber (direct) or recentTempoBlockNumber (ancestry)
         uint64 anchorBlockNumber;
@@ -753,14 +771,20 @@ contract ZonePortal is IZonePortal {
         if (recentTempoBlockNumber == 0) {
             // Direct mode: read tempoBlockNumber hash from EIP-2935
             anchorBlockNumber = tempoBlockNumber;
-            if (tempoBlockNumber > block.number) revert InvalidTempoBlockNumber();
+            if (tempoBlockNumber > block.number) {
+                revert InvalidTempoBlockNumber();
+            }
 
             anchorBlockHash = getBlockHash(tempoBlockNumber);
             if (anchorBlockHash == bytes32(0)) revert InvalidTempoBlockNumber();
         } else {
             // Ancestry mode: read recentTempoBlockNumber hash, proof verifies ancestry chain
-            if (recentTempoBlockNumber <= tempoBlockNumber) revert InvalidTempoBlockNumber();
-            if (recentTempoBlockNumber > block.number) revert InvalidTempoBlockNumber();
+            if (recentTempoBlockNumber <= tempoBlockNumber) {
+                revert InvalidTempoBlockNumber();
+            }
+            if (recentTempoBlockNumber > block.number) {
+                revert InvalidTempoBlockNumber();
+            }
 
             anchorBlockNumber = recentTempoBlockNumber;
             anchorBlockHash = getBlockHash(recentTempoBlockNumber);
