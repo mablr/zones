@@ -16,11 +16,13 @@ import {
     ITempoState,
     IZoneConfig,
     IZoneInbox,
+    IZoneOutbox,
     IZoneToken,
     PORTAL_CURRENT_DEPOSIT_QUEUE_HASH_SLOT,
     PORTAL_ENCRYPTION_KEYS_SLOT,
     QueuedDeposit,
-    TIP20_FACTORY_ADDRESS
+    TIP20_FACTORY_ADDRESS,
+    ZONE_OUTBOX
 } from "./IZone.sol";
 import { TempoState } from "./TempoState.sol";
 
@@ -48,6 +50,9 @@ contract ZoneInbox is IZoneInbox {
 
     /// @notice Last processed deposit number (mirrors lastProcessedDepositNumber on L1)
     uint64 public processedDepositNumber;
+
+    /// @notice Refunds parked after a withdrawal-bounce-back mint reverts on the zone.
+    mapping(address token => mapping(address owner => uint128 amount)) public refunds;
 
     /*//////////////////////////////////////////////////////////////
                               CONSTRUCTOR
@@ -103,8 +108,12 @@ contract ZoneInbox is IZoneInbox {
                 keyWord0 := mload(add(key, 32))
                 // Load second word only if key > 32 bytes
                 switch gt(keyLen, 32)
-                case 1 { keyWord1 := mload(add(key, 64)) }
-                default { keyWord1 := 0 }
+                case 1 {
+                    keyWord1 := mload(add(key, 64))
+                }
+                default {
+                    keyWord1 := 0
+                }
                 // Zero out bytes beyond key length in first word
                 if lt(keyLen, 32) {
                     let shift := mul(sub(32, keyLen), 8)
@@ -174,7 +183,7 @@ contract ZoneInbox is IZoneInbox {
     ///      Protocol and proof enforce at most one call at the start of a block (or zero if skipping).
     /// @param header RLP-encoded Tempo block header
     /// @param deposits Array of queued deposits to process (oldest first, must be contiguous)
-    /// @param decryptions Decryption data for encrypted deposits (1:1 with encrypted deposits, in order)
+    /// @param decryptions Decryption data for valid encrypted deposits, in order
     function advanceTempo(
         bytes calldata header,
         QueuedDeposit[] calldata deposits,
@@ -183,7 +192,9 @@ contract ZoneInbox is IZoneInbox {
     )
         external
     {
-        if (msg.sender != address(0) && msg.sender != config.sequencer()) revert OnlySequencer();
+        if (msg.sender != address(0) && msg.sender != config.sequencer()) {
+            revert OnlySequencer();
+        }
 
         // Step 1: Advance Tempo state (validates chain continuity internally)
         _tempoState.finalizeTempo(header);
@@ -204,22 +215,60 @@ contract ZoneInbox is IZoneInbox {
             QueuedDeposit calldata qd = deposits[i];
 
             if (qd.depositType == DepositType.Regular) {
-                // Decode regular deposit
                 Deposit memory d = abi.decode(qd.depositData, (Deposit));
-
-                // Advance the hash chain with type discriminator
                 currentHash = keccak256(abi.encode(DepositType.Regular, d, currentHash));
 
-                // Mint the correct zone-side TIP-20 token to the recipient
-                IZoneToken(d.token).mint(d.to, d.amount);
-
-                emit DepositProcessed(currentHash, d.sender, d.to, d.token, d.amount, d.memo);
+                if (d.bouncebackRecipient == address(0)) {
+                    _processWithdrawalBounceBack(d);
+                } else if (qd.rejected) {
+                    _enqueueDepositBounceBack(
+                        d.token, d.amount, d.bouncebackRecipient, d.bouncebackFee
+                    );
+                    emit DepositRejected(
+                        currentHash,
+                        d.sender,
+                        DepositType.Regular,
+                        d.token,
+                        d.amount,
+                        d.bouncebackRecipient
+                    );
+                } else {
+                    try IZoneToken(d.token).mint(d.to, d.amount) {
+                        emit DepositProcessed(
+                            currentHash, d.sender, d.to, d.token, d.amount, d.memo
+                        );
+                    } catch {
+                        _enqueueDepositBounceBack(
+                            d.token, d.amount, d.bouncebackRecipient, d.bouncebackFee
+                        );
+                        emit DepositFailed(
+                            currentHash, d.sender, d.to, d.token, d.amount, d.bouncebackRecipient
+                        );
+                    }
+                }
             } else {
-                // Decode encrypted deposit
                 EncryptedDeposit memory ed = abi.decode(qd.depositData, (EncryptedDeposit));
+                currentHash = keccak256(abi.encode(DepositType.Encrypted, ed, currentHash));
+
+                if (qd.rejected) {
+                    _enqueueDepositBounceBack(
+                        ed.token, ed.amount, ed.bouncebackRecipient, ed.bouncebackFee
+                    );
+                    emit DepositRejected(
+                        currentHash,
+                        ed.sender,
+                        DepositType.Encrypted,
+                        ed.token,
+                        ed.amount,
+                        ed.bouncebackRecipient
+                    );
+                    continue;
+                }
 
                 // Sequencer must provide decryption for this encrypted deposit
-                if (decryptionIndex >= decryptions.length) revert MissingDecryptionData();
+                if (decryptionIndex >= decryptions.length) {
+                    revert MissingDecryptionData();
+                }
                 DecryptionData calldata dec = decryptions[decryptionIndex++];
 
                 // Step 1: Verify Chaum-Pedersen proof of correct shared secret derivation
@@ -239,30 +288,33 @@ contract ZoneInbox is IZoneInbox {
                         seqPubYParity,
                         dec.cpProof
                     );
-                if (!proofValid) revert InvalidSharedSecretProof();
 
-                // Step 2: Derive AES key from shared secret using HKDF-SHA256
-                // This is done in Solidity using the SHA256 precompile (0x02)
-                bytes32 aesKey = _hkdfSha256(
-                    dec.sharedSecret,
-                    "ecies-aes-key",
-                    abi.encodePacked(tempoPortal, ed.keyIndex, ed.encrypted.ephemeralPubkeyX)
-                );
-
-                // Step 3: Decrypt using AES-256-GCM precompile
-                // The GCM tag proves the plaintext matches the ciphertext for this shared secret
-                (bytes memory decryptedPlaintext, bool valid) = IAesGcmDecrypt(AES_GCM_DECRYPT)
-                    .decrypt(
-                        aesKey,
-                        ed.encrypted.nonce,
-                        ed.encrypted.ciphertext,
-                        "", // empty AAD
-                        ed.encrypted.tag
+                bool valid = proofValid;
+                bytes memory decryptedPlaintext;
+                if (valid) {
+                    // Step 2: Derive AES key from shared secret using HKDF-SHA256
+                    // This is done in Solidity using the SHA256 precompile (0x02)
+                    bytes32 aesKey = _hkdfSha256(
+                        dec.sharedSecret,
+                        "ecies-aes-key",
+                        abi.encodePacked(tempoPortal, ed.keyIndex, ed.encrypted.ephemeralPubkeyX)
                     );
 
-                // Step 4: Decode the decrypted (to, memo) from the plaintext
+                    // Step 3: Decrypt using AES-256-GCM precompile
+                    // The GCM tag proves the plaintext matches the ciphertext for this shared secret
+                    (decryptedPlaintext, valid) = IAesGcmDecrypt(AES_GCM_DECRYPT)
+                        .decrypt(
+                            aesKey,
+                            ed.encrypted.nonce,
+                            ed.encrypted.ciphertext,
+                            "", // empty AAD
+                            ed.encrypted.tag
+                        );
+                }
+
+                // Step 4: Decode the decrypted (to, memo) from the plaintext.
                 // Plaintext is packed as [address(20 bytes)][memo(32 bytes)][padding(12 bytes)]
-                // Must be exactly ENCRYPTED_PAYLOAD_PLAINTEXT_SIZE (64) bytes
+                // and must be exactly ENCRYPTED_PAYLOAD_PLAINTEXT_SIZE (64) bytes.
                 address decryptedTo;
                 bytes32 decryptedMemo;
                 if (valid && decryptedPlaintext.length == ENCRYPTED_PAYLOAD_PLAINTEXT_SIZE) {
@@ -272,24 +324,20 @@ contract ZoneInbox is IZoneInbox {
                     valid = false;
                 }
 
-                // Advance the hash chain with type discriminator
-                currentHash = keccak256(abi.encode(DepositType.Encrypted, ed, currentHash));
-
                 if (!valid) {
-                    // Decryption failed: credit the depositor's address on the zone.
-                    // L1 funds remain escrowed in the portal.
-                    IZoneToken(ed.token).mint(ed.sender, ed.amount);
+                    _enqueueDepositBounceBack(
+                        ed.token, ed.amount, ed.bouncebackRecipient, ed.bouncebackFee
+                    );
                     emit EncryptedDepositFailed(currentHash, ed.sender, ed.token, ed.amount);
                 } else {
-                    // Decryption succeeded — try minting to the decrypted recipient.
-                    // If the mint fails (e.g. recipient is blacklisted by TIP-403
-                    // policy), fall back to crediting the depositor instead.
                     try IZoneToken(ed.token).mint(decryptedTo, ed.amount) {
                         emit EncryptedDepositProcessed(
                             currentHash, ed.sender, decryptedTo, ed.token, ed.amount, decryptedMemo
                         );
                     } catch {
-                        IZoneToken(ed.token).mint(ed.sender, ed.amount);
+                        _enqueueDepositBounceBack(
+                            ed.token, ed.amount, ed.bouncebackRecipient, ed.bouncebackFee
+                        );
                         emit EncryptedDepositFailed(currentHash, ed.sender, ed.token, ed.amount);
                     }
                 }
@@ -325,6 +373,39 @@ contract ZoneInbox is IZoneInbox {
             currentHash,
             processedDepositNumber
         );
+    }
+
+    function _enqueueDepositBounceBack(
+        address token,
+        uint128 amount,
+        address bouncebackRecipient,
+        uint128 bouncebackFee
+    )
+        internal
+    {
+        IZoneOutbox(ZONE_OUTBOX)
+            .enqueueDepositBounceBack(token, amount, bouncebackRecipient, bouncebackFee);
+    }
+
+    function _processWithdrawalBounceBack(Deposit memory d) internal {
+        try IZoneToken(d.token).mint(d.to, d.amount) {
+            emit WithdrawalBounceBackProcessed(d.to, d.token, d.amount);
+        } catch {
+            refunds[d.token][d.to] += d.amount;
+            emit WithdrawalBounceBackPending(d.to, d.token, d.amount);
+        }
+    }
+
+    function claimRefund(address token) external returns (uint128 amount) {
+        amount = refunds[token][msg.sender];
+        refunds[token][msg.sender] = 0;
+
+        try IZoneToken(token).mint(msg.sender, amount) {
+            emit RefundClaimed(msg.sender, token, amount);
+        } catch {
+            refunds[token][msg.sender] = amount;
+            revert();
+        }
     }
 
 }

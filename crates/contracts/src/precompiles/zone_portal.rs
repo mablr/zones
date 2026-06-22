@@ -20,6 +20,7 @@ crate::sol! {
             address to;
             uint128 amount;
             uint128 fee;
+            uint128 bouncebackFee;
             bytes32 memo;
             uint64 gasLimit;
             address fallbackRecipient;
@@ -42,6 +43,7 @@ crate::sol! {
             address sender;
             uint128 amount;
             address bouncebackRecipient;
+            uint128 bouncebackFee;
             uint256 keyIndex;
             EncryptedDepositPayload encrypted;
         }
@@ -67,6 +69,7 @@ crate::sol! {
             address to,
             uint128 netAmount,
             uint128 fee,
+            uint128 bouncebackFee,
             bytes32 memo,
             address bouncebackRecipient,
             uint64 depositNumber
@@ -78,6 +81,7 @@ crate::sol! {
             address token,
             uint128 netAmount,
             uint128 fee,
+            uint128 bouncebackFee,
             uint256 keyIndex,
             bytes32 ephemeralPubkeyX,
             uint8 ephemeralPubkeyYParity,
@@ -102,7 +106,7 @@ crate::sol! {
 
         event WithdrawalProcessed(address indexed to, address token, uint128 amount, bool callbackSuccess);
 
-        event BounceBack(
+        event WithdrawalBounceBack(
             bytes32 indexed newCurrentDepositQueueHash,
             address indexed fallbackRecipient,
             address token,
@@ -114,7 +118,14 @@ crate::sol! {
             address indexed bouncebackRecipient,
             address token,
             uint128 amount,
-            bool success
+            uint128 bouncebackFee
+        );
+
+        event DepositBounceBackPending(
+            address indexed bouncebackRecipient,
+            address token,
+            uint128 amount,
+            uint128 bouncebackFee
         );
 
         event RefundClaimed(address indexed recipient, address indexed token, uint128 amount);
@@ -135,6 +146,7 @@ crate::sol! {
         error InvalidProof();
         error InvalidTempoBlockNumber();
         error DepositPolicyForbids();
+        error InvalidBouncebackRecipient();
 
         // -- View functions --
 
@@ -152,6 +164,7 @@ crate::sol! {
         function withdrawalQueueSlot(uint256 slot) external view returns (bytes32);
         function genesisTempoBlockNumber() external view returns (uint64);
         function calculateDepositFee() external view returns (uint128 fee);
+        function calculateBouncebackFee() external view returns (uint128 fee);
         function depositCount() external view returns (uint64);
         function lastProcessedDepositNumber() external view returns (uint64);
         function MAX_WITHDRAWAL_GAS_LIMIT() external view returns (uint64);
@@ -208,10 +221,12 @@ crate::sol! {
         function enabledTokenAt(uint256 index) external view returns (address);
         function zoneGasRate() external view returns (uint128);
         function pendingSequencer() external view returns (address);
+        function refunds(address token, address owner) external view returns (uint128);
 
         function sequencerEncryptionKey() external view returns (bytes32 x, uint8 yParity);
 
         function encryptionKeyCount() external view returns (uint256);
+        function claimRefund(address token) external returns (uint128 amount);
     }
 }
 
@@ -279,6 +294,7 @@ impl core::fmt::Display for ZonePortal::ZonePortalErrors {
             Self::InvalidProof(_) => f.write_str("InvalidProof"),
             Self::InvalidTempoBlockNumber(_) => f.write_str("InvalidTempoBlockNumber"),
             Self::DepositPolicyForbids(_) => f.write_str("DepositPolicyForbids"),
+            Self::InvalidBouncebackRecipient(_) => f.write_str("InvalidBouncebackRecipient"),
         }
     }
 }
@@ -303,12 +319,19 @@ impl Withdrawal {
         tx_hash: B256,
         encrypted_sender: Bytes,
     ) -> Self {
+        let sender_tag = if event.sender.is_zero() && event.fallbackRecipient.is_zero() {
+            Self::sender_tag(Address::ZERO, B256::ZERO)
+        } else {
+            Self::sender_tag(event.sender, tx_hash)
+        };
+
         Self {
             token: event.token,
-            senderTag: Self::sender_tag(event.sender, tx_hash),
+            senderTag: sender_tag,
             to: event.to,
             amount: event.amount,
             fee: event.fee,
+            bouncebackFee: event.bouncebackFee,
             memo: event.memo,
             gasLimit: event.gasLimit,
             fallbackRecipient: event.fallbackRecipient,

@@ -260,7 +260,7 @@ async fn test_cross_zone_withdrawal() -> eyre::Result<()> {
 
     // --- Step 2: Deploy L1 infrastructure (factory, two portals, router) ---
     let (portal_a, portal_b, router) = l1
-        .deploy_two_zones_with_sequencers(seq_a_signer.address(), seq_b_signer.address())
+        .deploy_two_zones_with_sequencers(seq_a_signer.clone(), seq_b_signer.clone())
         .await?;
 
     // --- Step 3: Start both zone nodes ---
@@ -861,26 +861,16 @@ async fn test_multiasset_deposit_withdrawal() -> eyre::Result<()> {
 async fn test_encrypted_deposit_and_withdrawal() -> eyre::Result<()> {
     reth_tracing::init_test_tracing();
 
-    // Generate sequencer encryption key (deterministic for test reproducibility)
-    use sha2::{Digest, Sha256};
-    let enc_key_bytes: [u8; 32] = Sha256::digest(b"test-sequencer-encryption-key-l1-e2e").into();
-    let encryption_key = k256::SecretKey::from_slice(&enc_key_bytes).expect("valid key");
-
     // --- Step 1: Start L1 + deploy zone ---
     let l1 = L1TestNode::start().await?;
+    let encryption_key = k256::SecretKey::from(l1.dev_signer().credential());
     let portal_address = l1.deploy_zone().await?;
 
     // --- Step 2: Start zone with sequencer key ---
     // Must start the zone BEFORE registering the encryption key, so the zone's
     // genesis anchor captures the current L1 block. The encryption key registration
     // and deposit happen in subsequent L1 blocks that the zone processes naturally.
-    let zone = ZoneTestNode::start_from_l1_with_sequencer_signer(
-        l1.http_url(),
-        l1.ws_url(),
-        portal_address,
-        alloy_signer_local::PrivateKeySigner::from_signing_key(encryption_key.clone().into()),
-    )
-    .await?;
+    let zone = ZoneTestNode::start_from_l1(l1.http_url(), l1.ws_url(), portal_address).await?;
 
     zone.wait_for_l2_tempo_finalized(0, L1_TIMEOUT).await?;
 
@@ -1005,13 +995,13 @@ async fn test_l1_policy_operations_and_zone_advancement() -> eyre::Result<()> {
 }
 
 /// Test that an encrypted deposit whose decrypted recipient is blacklisted
-/// gets redirected to the sender (refund) instead of minting to the recipient.
+/// gets bounced back to the sender on L1 instead of minting to the recipient.
 ///
 ///  1. Start L1 dev node, deploy zone, register encryption key.
 ///  2. Create a blacklist policy, assign to pathUSD, blacklist the recipient.
 ///  3. Fund the policy cache so the zone knows about the blacklist.
 ///  4. Make an encrypted deposit targeting the blacklisted recipient.
-///  5. Verify the deposit is refunded to the sender (minted to sender's L2 address).
+///  5. Verify the deposit is refunded to the sender on L1.
 ///
 /// NOTE: This test validates the builder-level policy check in `build_encrypted_deposit`.
 /// The zone's policy cache must be pre-populated for the check to trigger.
@@ -1019,14 +1009,10 @@ async fn test_l1_policy_operations_and_zone_advancement() -> eyre::Result<()> {
 async fn test_encrypted_deposit_blacklisted_recipient() -> eyre::Result<()> {
     reth_tracing::init_test_tracing();
 
-    // Generate sequencer encryption key
-    use sha2::{Digest, Sha256};
-    let enc_key_bytes: [u8; 32] =
-        Sha256::digest(b"test-sequencer-encryption-key-blacklist-e2e").into();
-    let encryption_key = k256::SecretKey::from_slice(&enc_key_bytes).expect("valid key");
-
     // --- Step 1: Start L1 + deploy zone ---
     let l1 = L1TestNode::start().await?;
+    let sequencer_signer = l1.dev_signer();
+    let encryption_key = k256::SecretKey::from(sequencer_signer.credential());
     let portal_address = l1.deploy_zone().await?;
 
     // --- Step 2: Create blacklist policy and blacklist the intended recipient ---
@@ -1045,13 +1031,7 @@ async fn test_encrypted_deposit_blacklisted_recipient() -> eyre::Result<()> {
     );
 
     // --- Step 3: Start zone with sequencer key ---
-    let zone = ZoneTestNode::start_from_l1_with_sequencer_signer(
-        l1.http_url(),
-        l1.ws_url(),
-        portal_address,
-        alloy_signer_local::PrivateKeySigner::from_signing_key(encryption_key.clone().into()),
-    )
-    .await?;
+    let zone = ZoneTestNode::start_from_l1(l1.http_url(), l1.ws_url(), portal_address).await?;
     zone.wait_for_l2_tempo_finalized(0, L1_TIMEOUT).await?;
 
     // --- Step 4: Register encryption key ---
@@ -1082,8 +1062,8 @@ async fn test_encrypted_deposit_blacklisted_recipient() -> eyre::Result<()> {
     // Make the encrypted deposit on L1 targeting the blacklisted recipient.
     // We don't use `deposit_encrypted` because it waits for the recipient's
     // balance to increase — which never happens since the deposit gets
-    // redirected to the sender. Instead, call the portal directly and wait
-    // for the sender's balance.
+    // bounced back to the sender. Instead, call the portal directly and wait
+    // for the sender's L1 balance to be restored.
     {
         use tempo_contracts::precompiles::ITIP20;
         use zone::precompiles::ecies;
@@ -1134,9 +1114,10 @@ async fn test_encrypted_deposit_blacklisted_recipient() -> eyre::Result<()> {
         eyre::ensure!(receipt.status(), "L1 depositEncrypted tx failed");
     }
 
-    // Wait for the refund to arrive at the sender (not the blacklisted recipient).
-    zone.wait_for_balance(
-        ZONE_TOKEN_ADDRESS,
+    // Wait for the bounce-back refund to arrive at the sender on L1 (not the
+    // blacklisted recipient on L2).
+    l1.wait_for_balance(
+        PATH_USD_ADDRESS,
         depositor.address(),
         U256::from(deposit_amount),
         L1_TIMEOUT,

@@ -24,6 +24,8 @@ import {
     PORTAL_ENCRYPTION_KEYS_SLOT,
     QueuedDeposit,
     Withdrawal,
+    ZONE_INBOX,
+    ZONE_OUTBOX,
     ZoneParams
 } from "../../src/zone/IZone.sol";
 import { EMPTY_SENTINEL } from "../../src/zone/WithdrawalQueueLib.sol";
@@ -173,11 +175,16 @@ contract ZoneBridgeTest is BaseTest {
         );
 
         // Zone inbox (advances Tempo state and processes deposits)
-        l2Inbox = new ZoneInbox(address(l2Config), address(l1Portal), address(l2TempoState));
+        ZoneInbox inboxImpl =
+            new ZoneInbox(address(l2Config), address(l1Portal), address(l2TempoState));
+        vm.etch(ZONE_INBOX, address(inboxImpl).code);
+        l2Inbox = ZoneInbox(ZONE_INBOX);
         l2ZoneToken.setMinter(address(l2Inbox), true);
 
         // Zone outbox (handles withdrawals)
-        l2Outbox = new ZoneOutbox(address(l2Config));
+        ZoneOutbox outboxImpl = new ZoneOutbox(address(l2Config));
+        vm.etch(ZONE_OUTBOX, address(outboxImpl).code);
+        l2Outbox = ZoneOutbox(ZONE_OUTBOX);
         l2ZoneToken.setBurner(address(l2Outbox), true);
 
         // Initialize zone block hash
@@ -208,6 +215,7 @@ contract ZoneBridgeTest is BaseTest {
             to: to,
             amount: amount,
             fee: 0,
+            bouncebackFee: 0,
             memo: memo,
             gasLimit: gasLimit,
             fallbackRecipient: fallbackRecipient,
@@ -258,6 +266,7 @@ contract ZoneBridgeTest is BaseTest {
             to: to,
             amount: amount,
             bouncebackRecipient: to,
+            bouncebackFee: l1Portal.calculateBouncebackFee(),
             memo: memo
         });
 
@@ -311,7 +320,9 @@ contract ZoneBridgeTest is BaseTest {
         queued = new QueuedDeposit[](deposits.length);
         for (uint256 i = 0; i < deposits.length; i++) {
             queued[i] = QueuedDeposit({
-                depositType: DepositType.Regular, depositData: abi.encode(deposits[i])
+                depositType: DepositType.Regular,
+                depositData: abi.encode(deposits[i]),
+                rejected: false
             });
         }
     }
@@ -869,6 +880,7 @@ contract ZoneBridgeTest is BaseTest {
             sender: sender,
             amount: netAmount,
             bouncebackRecipient: sender,
+            bouncebackFee: l1Portal.calculateBouncebackFee(),
             keyIndex: keyIndex,
             encrypted: encrypted
         });
@@ -970,7 +982,8 @@ contract ZoneBridgeTest is BaseTest {
         for (uint256 i = 0; i < pendingEncryptedDeposits.length; i++) {
             queued[i] = QueuedDeposit({
                 depositType: DepositType.Encrypted,
-                depositData: abi.encode(pendingEncryptedDeposits[i].encDeposit)
+                depositData: abi.encode(pendingEncryptedDeposits[i].encDeposit),
+                rejected: false
             });
             decs[i] = DecryptionData({
                 sharedSecret: bytes32(uint256(0xDEAD)),
@@ -1084,6 +1097,7 @@ contract ZoneBridgeTest is BaseTest {
         // === STEP 2: Alice makes encrypted deposit on L1 ===
         uint128 depositAmount = 1000e6;
         uint128 fee = l1Portal.calculateDepositFee();
+        uint128 bouncebackFee = l1Portal.calculateBouncebackFee();
         uint128 netAmount = depositAmount - fee;
         EncryptedDepositPayload memory payload = _makeEncryptedPayload();
 
@@ -1100,20 +1114,43 @@ contract ZoneBridgeTest is BaseTest {
         bytes32 newProcessedHash =
             _sequencerRelayEncryptedDepositsToL2(address(0xBEEF), bytes32("wrong"), false);
 
-        // Verify zone state — tokens bounced back to sender (alice = 100K - deposit + bounce)
+        // Verify zone state — no mint was attempted, and a Tempo refund withdrawal was enqueued.
         assertEq(
             l2ZoneToken.balanceOf(alice),
-            100_000e6 - depositAmount + netAmount,
-            "Sender should get bounced tokens"
+            100_000e6 - depositAmount,
+            "Sender should not receive a zone mint"
         );
         assertEq(l2ZoneToken.balanceOf(address(0xBEEF)), 0, "Failed recipient should get nothing");
+        assertEq(l2Outbox.pendingWithdrawalsCount(), 1, "Bounce-back withdrawal should be queued");
         assertEq(
             l2Inbox.processedDepositQueueHash(), newProcessedHash, "Zone processed hash mismatch"
         );
 
-        // === STEP 4: Submit batch to L1 ===
+        // === STEP 4: Submit batch to L1 with the deposit bounce-back withdrawal ===
+        uint256 aliceBeforeRefund = l2ZoneToken.balanceOf(alice);
+        uint256 portalBeforeRefund = l2ZoneToken.balanceOf(address(l1Portal));
         _sequencerSubmitBatch(newProcessedHash);
         assertEq(l1Portal.withdrawalBatchIndex(), 1, "Batch index should advance");
+
+        Withdrawal memory bounce = Withdrawal({
+            token: address(l2ZoneToken),
+            senderTag: keccak256(abi.encodePacked(address(0), bytes32(0))),
+            to: alice,
+            amount: netAmount,
+            fee: 0,
+            bouncebackFee: bouncebackFee,
+            memo: bytes32(0),
+            gasLimit: 0,
+            fallbackRecipient: address(0),
+            callbackData: "",
+            encryptedSender: ""
+        });
+        bytes32 expectedQueueHash = keccak256(abi.encode(bounce, EMPTY_SENTINEL));
+        assertEq(l1Portal.withdrawalQueueSlot(0), expectedQueueHash);
+
+        l1Portal.processWithdrawal(bounce, bytes32(0));
+        assertEq(l2ZoneToken.balanceOf(alice), aliceBeforeRefund + netAmount - bouncebackFee);
+        assertEq(l2ZoneToken.balanceOf(address(l1Portal)), portalBeforeRefund - netAmount);
     }
 
     /// @notice Mixed queue: regular deposit + encrypted deposit in single advanceTempo
@@ -1123,6 +1160,7 @@ contract ZoneBridgeTest is BaseTest {
 
         uint128 depositAmount = 1000e6;
         uint128 fee = l1Portal.calculateDepositFee();
+        uint128 bouncebackFee = l1Portal.calculateBouncebackFee();
         uint128 netAmount = depositAmount - fee;
 
         // === STEP 2: Alice makes a regular deposit ===
@@ -1162,6 +1200,7 @@ contract ZoneBridgeTest is BaseTest {
             to: alice,
             amount: depositAmount,
             bouncebackRecipient: alice,
+            bouncebackFee: bouncebackFee,
             memo: bytes32("regular")
         });
         bytes32 prevHash = l2Inbox.processedDepositQueueHash();
@@ -1174,6 +1213,7 @@ contract ZoneBridgeTest is BaseTest {
             sender: bob,
             amount: netAmount,
             bouncebackRecipient: bob,
+            bouncebackFee: bouncebackFee,
             keyIndex: 0,
             encrypted: payload
         });
@@ -1187,6 +1227,7 @@ contract ZoneBridgeTest is BaseTest {
             to: carol,
             amount: depositAmount,
             bouncebackRecipient: carol,
+            bouncebackFee: bouncebackFee,
             memo: bytes32("carol")
         });
         bytes32 hash3 = keccak256(abi.encode(DepositType.Regular, d3, hash2));
@@ -1194,10 +1235,15 @@ contract ZoneBridgeTest is BaseTest {
 
         // === STEP 6: Build the mixed queue and relay to zone ===
         QueuedDeposit[] memory queued = new QueuedDeposit[](3);
-        queued[0] = QueuedDeposit({ depositType: DepositType.Regular, depositData: abi.encode(d1) });
-        queued[1] =
-            QueuedDeposit({ depositType: DepositType.Encrypted, depositData: abi.encode(ed) });
-        queued[2] = QueuedDeposit({ depositType: DepositType.Regular, depositData: abi.encode(d3) });
+        queued[0] = QueuedDeposit({
+            depositType: DepositType.Regular, depositData: abi.encode(d1), rejected: false
+        });
+        queued[1] = QueuedDeposit({
+            depositType: DepositType.Encrypted, depositData: abi.encode(ed), rejected: false
+        });
+        queued[2] = QueuedDeposit({
+            depositType: DepositType.Regular, depositData: abi.encode(d3), rejected: false
+        });
 
         // Decryption data (only 1 encrypted deposit)
         address decryptedTo = address(0x700);
@@ -1257,6 +1303,7 @@ contract ZoneBridgeTest is BaseTest {
         // === STEP 2: Alice deposits with keyIndex=0 ===
         uint128 depositAmount = 1000e6;
         uint128 fee = l1Portal.calculateDepositFee();
+        uint128 bouncebackFee = l1Portal.calculateBouncebackFee();
         uint128 netAmount = depositAmount - fee;
         EncryptedDepositPayload memory payload1 = _makeEncryptedPayload();
 
@@ -1288,6 +1335,7 @@ contract ZoneBridgeTest is BaseTest {
             sender: alice,
             amount: netAmount,
             bouncebackRecipient: alice,
+            bouncebackFee: bouncebackFee,
             keyIndex: 0,
             encrypted: payload1
         });
@@ -1299,6 +1347,7 @@ contract ZoneBridgeTest is BaseTest {
             sender: bob,
             amount: netAmount,
             bouncebackRecipient: bob,
+            bouncebackFee: bouncebackFee,
             keyIndex: 1,
             encrypted: payload2
         });
@@ -1307,10 +1356,12 @@ contract ZoneBridgeTest is BaseTest {
 
         // === STEP 6: Build queue and relay ===
         QueuedDeposit[] memory queued = new QueuedDeposit[](2);
-        queued[0] =
-            QueuedDeposit({ depositType: DepositType.Encrypted, depositData: abi.encode(ed1) });
-        queued[1] =
-            QueuedDeposit({ depositType: DepositType.Encrypted, depositData: abi.encode(ed2) });
+        queued[0] = QueuedDeposit({
+            depositType: DepositType.Encrypted, depositData: abi.encode(ed1), rejected: false
+        });
+        queued[1] = QueuedDeposit({
+            depositType: DepositType.Encrypted, depositData: abi.encode(ed2), rejected: false
+        });
 
         address aliceRecipient = address(0x700);
         bytes32 aliceMemo = bytes32("alice-secret");

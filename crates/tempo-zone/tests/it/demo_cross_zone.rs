@@ -45,7 +45,7 @@ async fn test_cross_zone_send() -> eyre::Result<()> {
 
     // --- Step 2: Deploy L1 infrastructure ---
     let (portal_a, portal_b, router) = l1
-        .deploy_two_zones_with_sequencers(seq_a_signer.address(), seq_b_signer.address())
+        .deploy_two_zones_with_sequencers(seq_a_signer.clone(), seq_b_signer.clone())
         .await?;
 
     // --- Step 3: Start both zone nodes ---

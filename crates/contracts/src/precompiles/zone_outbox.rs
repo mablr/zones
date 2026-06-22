@@ -21,6 +21,7 @@ crate::sol! {
             address to,
             uint128 amount,
             uint128 fee,
+            uint128 bouncebackFee,
             bytes32 memo,
             uint64 gasLimit,
             address fallbackRecipient,
@@ -34,6 +35,7 @@ crate::sol! {
 
         error OnlySequencer();
         error GasLimitTooHigh();
+        error OnlyZoneInbox();
 
         // -- View functions --
 
@@ -55,6 +57,12 @@ crate::sol! {
             address fallbackRecipient,
             bytes calldata data,
             bytes calldata revealTo
+        ) external;
+        function enqueueDepositBounceBack(
+            address token,
+            uint128 amount,
+            address bouncebackRecipient,
+            uint128 bouncebackFee
         ) external;
         function finalizeWithdrawalBatch(uint256 count, uint64 blockNumber, bytes[] calldata encryptedSenders) external returns (bytes32 withdrawalQueueHash);
     }

@@ -15,6 +15,7 @@ crate::sol! {
             address to;
             uint128 amount;
             address bouncebackRecipient;
+            uint128 bouncebackFee;
             bytes32 memo;
         }
 
@@ -36,6 +37,7 @@ crate::sol! {
         struct QueuedDeposit {
             DepositType depositType;
             bytes depositData;
+            bool rejected;
         }
 
         /// Chaum-Pedersen proof for ECDH shared secret derivation.
@@ -86,6 +88,30 @@ crate::sol! {
             uint128 amount
         );
 
+        event DepositFailed(
+            bytes32 indexed depositHash,
+            address indexed sender,
+            address indexed to,
+            address token,
+            uint128 amount,
+            address bouncebackRecipient
+        );
+
+        event DepositRejected(
+            bytes32 indexed depositHash,
+            address indexed sender,
+            DepositType depositType,
+            address token,
+            uint128 amount,
+            address bouncebackRecipient
+        );
+
+        event WithdrawalBounceBackProcessed(address indexed fallbackRecipient, address token, uint128 amount);
+
+        event WithdrawalBounceBackPending(address indexed fallbackRecipient, address token, uint128 amount);
+
+        event RefundClaimed(address indexed recipient, address indexed token, uint128 amount);
+
         /// Emitted when a TIP-20 token is enabled on the zone via advanceTempo.
         event TokenEnabled(address indexed token, string name, string symbol, string currency);
 
@@ -100,6 +126,8 @@ crate::sol! {
         function tempoPortal() external view returns (address);
         function tempoState() external view returns (address);
         function config() external view returns (address);
+        function refunds(address token, address owner) external view returns (uint128);
+        function claimRefund(address token) external returns (uint128 amount);
 
         function advanceTempo(
             bytes calldata header,

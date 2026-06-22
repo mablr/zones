@@ -45,15 +45,17 @@ impl L1BlockDeposits {
                         to: d.to,
                         amount: d.amount,
                         bouncebackRecipient: d.bounceback_recipient,
+                        bouncebackFee: d.bounceback_fee,
                         memo: d.memo,
                     };
                     queued_deposits.push(abi::QueuedDeposit {
                         depositType: abi::DepositType::Regular,
                         depositData: Bytes::from(deposit.abi_encode()),
+                        rejected: false,
                     });
                 }
                 L1Deposit::Encrypted(d) => {
-                    let queued = abi::QueuedDeposit {
+                    let mut queued = abi::QueuedDeposit {
                         depositType: abi::DepositType::Encrypted,
                         depositData: Bytes::from(
                             abi::EncryptedDeposit {
@@ -61,6 +63,7 @@ impl L1BlockDeposits {
                                 sender: d.sender,
                                 amount: d.amount,
                                 bouncebackRecipient: d.bounceback_recipient,
+                                bouncebackFee: d.bounceback_fee,
                                 keyIndex: d.key_index,
                                 encrypted: abi::EncryptedDepositPayload {
                                     ephemeralPubkeyX: d.ephemeral_pubkey_x,
@@ -72,6 +75,7 @@ impl L1BlockDeposits {
                             }
                             .abi_encode(),
                         ),
+                        rejected: false,
                     };
 
                     // Attempt full ECIES decryption.
@@ -123,8 +127,11 @@ impl L1BlockDeposits {
                                 recipient = %dec.to,
                                 token = %d.token,
                                 amount = %d.amount,
-                                "Encrypted deposit recipient unauthorized; ZoneInbox will refund if mint is rejected"
+                                "Encrypted deposit recipient unauthorized; queuing deposit bounce-back"
                             );
+                            queued.rejected = true;
+                            queued_deposits.push(queued);
+                            continue;
                         }
 
                         let decryption = abi::DecryptionData {
@@ -226,7 +233,7 @@ pub struct PreparedL1Block {
     /// ABI-encoded queued deposits (regular + encrypted).
     #[serde(skip)]
     pub queued_deposits: Vec<abi::QueuedDeposit>,
-    /// Decryption data for encrypted deposits (one per encrypted deposit, in order).
+    /// Decryption data for non-rejected encrypted deposits, in order.
     #[serde(skip)]
     pub decryptions: Vec<abi::DecryptionData>,
     /// Tokens newly enabled for bridging in this block.
