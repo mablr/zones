@@ -115,6 +115,7 @@ contract ZoneIntegrationTest is BaseTest {
         l2TempoState.setMockStorageValue(
             address(l1Portal), bytes32(uint256(0)), bytes32(uint256(uint160(admin)))
         );
+        l2TempoState.setMockTokenEnabled(address(l1Portal), address(l2ZoneToken), true);
         l2Inbox = new ZoneInbox(address(l2Config), address(l1Portal), address(l2TempoState));
         l2Outbox = new ZoneOutbox(address(l2Config));
 

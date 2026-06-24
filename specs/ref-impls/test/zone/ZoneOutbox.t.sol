@@ -3,6 +3,7 @@ pragma solidity ^0.8.13;
 
 import {
     IZoneOutbox,
+    IZonePortal,
     LastBatch,
     Withdrawal,
     ZONE_INBOX,
@@ -48,6 +49,7 @@ contract ZoneOutboxTest is Test {
         tempoState.setMockStorageValue(
             mockPortal, bytes32(uint256(0)), bytes32(uint256(uint160(sequencer)))
         );
+        tempoState.setMockTokenEnabled(mockPortal, address(zoneToken), true);
         inbox = new ZoneInbox(address(config), mockPortal, address(tempoState));
         outbox = new ZoneOutbox(address(config));
 
@@ -174,6 +176,22 @@ contract ZoneOutboxTest is Test {
         vm.stopPrank();
 
         assertEq(outbox.pendingWithdrawalsCount(), 2);
+    }
+
+    function test_requestWithdrawal_revertsWhenTokenNotEnabled() public {
+        MockZoneToken disabledToken = new MockZoneToken("Disabled USD", "dUSD");
+        disabledToken.setMinter(address(this), true);
+        disabledToken.setBurner(address(outbox), true);
+        disabledToken.mint(alice, 1000e6);
+
+        vm.startPrank(alice);
+        disabledToken.approve(address(outbox), 500e6);
+        vm.expectRevert(IZonePortal.TokenNotEnabled.selector);
+        outbox.requestWithdrawal(address(disabledToken), bob, 500e6, bytes32(0), 0, alice, "");
+        vm.stopPrank();
+
+        assertEq(outbox.pendingWithdrawalsCount(), 0);
+        assertEq(disabledToken.balanceOf(alice), 1000e6);
     }
 
     /*//////////////////////////////////////////////////////////////
