@@ -39,8 +39,8 @@ contract MockPortalToken {
 
 contract ZonePortalGasLimitTest is Test {
 
-    uint256 internal constant WITHDRAWAL_QUEUE_TAIL_SLOT = 11;
-    uint256 internal constant WITHDRAWAL_QUEUE_SLOTS_MAPPING_SLOT = 12;
+    uint256 internal constant WITHDRAWAL_QUEUE_TAIL_SLOT = 12;
+    uint256 internal constant WITHDRAWAL_QUEUE_SLOTS_MAPPING_SLOT = 13;
 
     ZonePortal public portal;
     MockPortalToken public token;
@@ -54,6 +54,7 @@ contract ZonePortalGasLimitTest is Test {
             1,
             address(token),
             address(0x400),
+            address(this),
             address(this),
             address(0),
             keccak256("genesis"),

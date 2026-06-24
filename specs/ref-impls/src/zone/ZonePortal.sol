@@ -73,6 +73,9 @@ contract ZonePortal is IZonePortal {
     /// @notice Current sequencer address
     address public sequencer;
 
+    /// @notice Governance admin address
+    address public admin;
+
     /// @notice Pending sequencer for two-step transfer
     address public pendingSequencer;
 
@@ -101,14 +104,14 @@ contract ZonePortal is IZonePortal {
 
     /// @notice Historical encryption keys with activation blocks
     /// @dev Users specify which key they encrypted to (by index). Maintained for key rotation.
-    ///      Stored at slot 6 in the ZonePortal storage layout.
+    ///      Stored at slot 7 in the ZonePortal storage layout.
     EncryptionKeyEntry[] internal _encryptionKeys;
 
-    /// @notice Per-token configuration (stored at slot 7)
+    /// @notice Per-token configuration (stored at slot 8)
     /// @dev TokenConfig.enabled is permanent (write-once true); depositsActive can be toggled.
     mapping(address => TokenConfig) internal _tokenConfigs;
 
-    /// @notice Append-only list of enabled tokens (stored at slot 8)
+    /// @notice Append-only list of enabled tokens (stored at slot 9)
     /// @dev Tokens can never be removed from this list (non-custodial guarantee).
     address[] internal _enabledTokens;
 
@@ -129,6 +132,7 @@ contract ZonePortal is IZonePortal {
         uint32 _zoneId,
         address _initialToken,
         address _messenger,
+        address _admin,
         address _sequencer,
         address _verifier,
         bytes32 _genesisBlockHash,
@@ -137,6 +141,7 @@ contract ZonePortal is IZonePortal {
     ) {
         zoneId = _zoneId;
         messenger = _messenger;
+        admin = _admin;
         sequencer = _sequencer;
         verifier = _verifier;
         blockHash = _genesisBlockHash;
@@ -153,6 +158,11 @@ contract ZonePortal is IZonePortal {
 
     modifier onlySequencer() {
         if (msg.sender != sequencer) revert NotSequencer();
+        _;
+    }
+
+    modifier onlyAdmin() {
+        if (msg.sender != admin) revert NotAdmin();
         _;
     }
 
@@ -233,10 +243,10 @@ contract ZonePortal is IZonePortal {
         return _enabledTokens[index];
     }
 
-    /// @notice Enable a new TIP-20 token for bridging. Only callable by sequencer.
+    /// @notice Enable a new TIP-20 token for bridging. Only callable by admin.
     /// @dev Irreversible: once enabled, a token cannot be disabled (non-custodial guarantee).
     ///      Validates the token is a TIP-20 and grants messenger max approval.
-    function enableToken(address _token) external onlySequencer {
+    function enableToken(address _token) external onlyAdmin {
         if (_tokenConfigs[_token].enabled) revert TokenAlreadyEnabled();
         if (!ITIP20Factory(StdPrecompiles.TIP20_FACTORY_ADDRESS).isTIP20(_token)) {
             revert TokenNotEnabled();
@@ -244,16 +254,16 @@ contract ZonePortal is IZonePortal {
         _enableTokenInternal(_token);
     }
 
-    /// @notice Pause deposits for a token. Only callable by sequencer.
+    /// @notice Pause deposits for a token. Only callable by admin.
     /// @dev Does not affect withdrawal processing (non-custodial guarantee).
-    function pauseDeposits(address _token) external onlySequencer {
+    function pauseDeposits(address _token) external onlyAdmin {
         if (!_tokenConfigs[_token].enabled) revert TokenNotEnabled();
         _tokenConfigs[_token].depositsActive = false;
         emit DepositsPaused(_token);
     }
 
-    /// @notice Resume deposits for a token. Only callable by sequencer.
-    function resumeDeposits(address _token) external onlySequencer {
+    /// @notice Resume deposits for a token. Only callable by admin.
+    function resumeDeposits(address _token) external onlyAdmin {
         if (!_tokenConfigs[_token].enabled) revert TokenNotEnabled();
         _tokenConfigs[_token].depositsActive = true;
         emit DepositsResumed(_token);

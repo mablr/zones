@@ -355,11 +355,11 @@ just set-supply-cap <token-address> 1000000000000
 
 ### Enable a Token on the Zone
 
-To deposit a custom token into the zone, it must be enabled on the ZonePortal. By default the portal starts with `pathUSD`, or whichever TIP-20 you selected with `just create-zone <name> <token>` or `just deploy-zone <name> <token>`. Additional tokens must exist on L1 and be enabled by the sequencer.
+To deposit a custom token into the zone, it must be enabled on the ZonePortal. By default the portal starts with `pathUSD`, or whichever TIP-20 you selected with `just create-zone <name> <token>` or `just deploy-zone <name> <token>`. Additional tokens must exist on L1 and be enabled by the portal admin.
 
 ```bash
-# Enable a token by address (requires SEQUENCER_KEY, L1_RPC_URL, L1_PORTAL_ADDRESS)
-export SEQUENCER_KEY="0x<your-sequencer-key>"
+# Enable a token by address (requires ADMIN_KEY, L1_RPC_URL, L1_PORTAL_ADDRESS)
+export ADMIN_KEY="0x<your-admin-key>"
 export L1_PORTAL_ADDRESS=$(jq -r '.portal' generated/my-zone/zone.json)
 just enable-token <token-address>
 
@@ -369,6 +369,13 @@ just enable-token alphausd
 ```
 
 If `ZONE_RPC_URL` is set (defaults to `http://localhost:8546`), the command waits for the zone to process the L1 block and confirms the token is available on L2.
+
+The portal admin can also pause and resume deposits for an enabled token (withdrawals are unaffected). These calls are `onlyAdmin`, so they use the same `ADMIN_KEY` as `enable-token`:
+
+```bash
+just pause-deposits <token-address>
+just resume-deposits <token-address>
+```
 
 Once the token is enabled, approve the portal and deposit as usual — just pass the token address:
 
@@ -444,7 +451,7 @@ The demo walks through 9 steps, printing every transaction with an explorer link
 
 1. **Create token** — deploys a fresh TIP-20 "DemoUSD" via `TIP20Factory` (random salt each run)
 2. **Configure token** — sets supply cap, grants `ISSUER_ROLE`, mints tokens, approves portal
-3. **Enable on zone** — sequencer calls `enableToken` on the portal (auto-reads sequencer key from `zone.json`)
+3. **Enable on zone** — portal admin calls `enableToken` on the portal (auto-reads `adminKey` from `zone.json`, with `sequencerKey` as a legacy fallback)
 4. **Deposit** — plain deposit so admin has L2 funds
 5. **Blacklist** — creates a TIP-403 blacklist policy, adds a fresh target wallet, assigns the policy to the token
 6. **Encrypted deposit → bounce** — sends an encrypted deposit to the blacklisted target; zone rejects it and returns funds to sender
@@ -513,7 +520,7 @@ Zones inherit the Tempo L1 EVM but replace, disable, or pass through each precom
 | pathUSD (TIP-20) | `0x20C0000000000000000000000000000000000000` |
 | ZoneFactory (moderato) | `0xC73b446C0768bc315Be7741D60B4e494E3ebc0dC` |
 
-The xtasks use this Moderato `ZoneFactory` as their built-in default: `create-zone` and `zone-info` point at it automatically, and `deploy-router` falls back to it when `zone.json` does not already record `zoneFactory`.
+This deployment predates the admin-aware `createZone` ABI. Until a fresh shared factory is deployed, pass a compatible factory explicitly with `--zone-factory` or `ZONE_FACTORY`; `deploy-router` reads `zoneFactory` from `zone.json` or requires `--zone-factory`.
 
 ### Deploying a New ZoneFactory
 
@@ -540,7 +547,7 @@ cast call "$ZONE_FACTORY" "zoneCount()(uint32)" --rpc-url "$ETH_RPC_URL"
 cast call "$ZONE_FACTORY" "verifier()(address)" --rpc-url "$ETH_RPC_URL"
 ```
 
-`zoneCount()` should be `0` on a fresh deployment, and `verifier()` should return the verifier deployed by the factory constructor. Update `MODERATO_ZONE_FACTORY` in `xtask/src/zone_utils.rs`, the Key Addresses table above, and any other `rg` hits for the previous address.
+`zoneCount()` should be `0` on a fresh deployment, and `verifier()` should return the verifier deployed by the factory constructor. Pass the new address via `--zone-factory` / `ZONE_FACTORY`, and update the Key Addresses table above and any other `rg` hits for the previous address.
 
 Current deployment:
 
@@ -575,23 +582,27 @@ Current deployment:
 |----------|----------|-------------|
 | `L1_RPC_URL` | Yes | L1 WebSocket URL (`wss://...`) |
 | `SEQUENCER_KEY` | For sequencing | Sequencer private key |
+| `ADMIN_KEY` | For portal governance | Portal admin private key for `enableToken` / deposit pause controls. `SEQUENCER_KEY` only works for legacy zones where admin == sequencer. |
 | `PRIVATE_KEY` | For transactions | Key for L1 transactions (deposits, approvals) |
 | `L1_PORTAL_ADDRESS` | For deposits | ZonePortal address (from `zone.json`) |
 | `PRIVATE_RPC_MAX_AUTH_TOKEN_VALIDITY_SECS` | No | Maximum auth token validity the private RPC accepts, in seconds. The effective limit is capped at 30 days. |
 | `ZONE_TOKEN` | No | Default initial TIP-20 for `just create-zone` / `just deploy-zone`; defaults to `pathUSD` |
+| `ZONE_FACTORY` | Yes for `create-zone` / `deploy-zone` / `zone-info` | ZoneFactory address matching the current `createZone` ABI |
 
 ## Justfile Commands Reference
 
 | Command | Description |
 |---------|-------------|
 | `just deploy-zone <name> [<tip20>]` | One-shot: keygen → fund → create → genesis → start node |
-| `just create-zone <name> [<tip20>]` | Create zone on L1 + generate genesis (requires `PRIVATE_KEY`, `SEQUENCER_KEY`) |
+| `just create-zone <name> [<tip20>]` | Create zone on L1 + generate genesis (requires `PRIVATE_KEY`, `SEQUENCER_KEY`, `ZONE_FACTORY`) |
 | `just deploy-router <name>` | Deploy `SwapAndDepositRouter` on L1 for the zone and save it to `zone.json` |
 | `just zone-up <name> [reset] [profile]` | Start the zone node. `reset=true` wipes datadir. `profile=release` for production. |
 | `just max-approve-portal` | Approve portal to spend tokens on L1 |
 | `just send-deposit [to]` | Deposit tokens from L1 to zone (defaults to sender) |
 | `just send-deposit-encrypted [to]` | Encrypted deposit — hides recipient and memo on-chain |
-| `just enable-token <token>` | Enable a TIP-20 token on the portal for bridging (sequencer only) |
+| `just enable-token <token>` | Enable a TIP-20 token on the portal for bridging (admin only) |
+| `just pause-deposits <token>` | Pause deposits for an enabled token on the portal (admin only) |
+| `just resume-deposits <token>` | Resume deposits for a paused token on the portal (admin only) |
 | `just max-approve-outbox` | Approve outbox to spend tokens on zone |
 | `just send-withdrawal [to]` | Withdraw tokens from zone to L1 (defaults to sender) |
 | `just demo-swap-and-deposit <name>` | Self-contained same-zone router demo: create tokens, seed DEX liquidity, swap on L1, deposit output back into the zone |

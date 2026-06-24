@@ -108,12 +108,13 @@ send-deposit-encrypted amount="1000000" to="" memo="0x00000000000000000000000000
     cargo run -p tempo-xtask -- encrypted-deposit --private-key "$PK" $ARGS
 
 [group('zone')]
-[doc('Fetches and prints zone info from the ZoneFactory. Pass a zone ID (integer) or portal address (0x...).')]
+[doc('Fetches and prints zone info from the ZoneFactory. Pass a zone ID (integer) or portal address (0x...). Requires ZONE_FACTORY env var.')]
 zone-info identifier:
-    cargo run -p tempo-xtask -- zone-info {{identifier}}
+    ZONE_FACTORY="${ZONE_FACTORY:?Set ZONE_FACTORY env var}"
+    cargo run -p tempo-xtask -- zone-info {{identifier}} --zone-factory "$ZONE_FACTORY"
 
 [group('zone')]
-[doc('Creates a new zone on L1 via ZoneFactory and generates genesis + zone.json in generated/<name>/. Optional second positional argument selects the initial TIP-20 enabled on the portal; defaults to pathUSD. Requires L1_RPC_URL, PRIVATE_KEY, and SEQUENCER_KEY env vars.')]
+[doc('Creates a new zone on L1 via ZoneFactory and generates genesis + zone.json in generated/<name>/. Optional second positional argument selects the initial TIP-20 enabled on the portal; defaults to pathUSD. Requires L1_RPC_URL, PRIVATE_KEY, SEQUENCER_KEY, and ZONE_FACTORY env vars.')]
 create-zone name token="":
     #!/bin/bash
     set -euo pipefail
@@ -133,6 +134,7 @@ create-zone name token="":
             ZONE_TOKEN_L1="0x20c0000000000000000000000000000000000002" ;;
     esac
     SEQ_KEY="${SEQUENCER_KEY:?Set SEQUENCER_KEY env var}"
+    ZONE_FACTORY="${ZONE_FACTORY:?Set ZONE_FACTORY env var}"
     L1_RPC="${L1_RPC_URL:?Set L1_RPC_URL env var (wss://...)}"
     HTTP_RPC=$(echo "$L1_RPC" | sed 's|^wss://|https://|' | sed 's|^ws://|http://|')
     SEQUENCER_ADDR=$(cast wallet address "$SEQ_KEY")
@@ -147,6 +149,7 @@ create-zone name token="":
     cargo run -p tempo-xtask -- create-zone \
         --output "$OUTPUT" \
         --l1-rpc-url "$HTTP_RPC" \
+        --zone-factory "$ZONE_FACTORY" \
         --initial-token "$ZONE_TOKEN_L1" \
         --sequencer "$SEQUENCER_ADDR" \
         --private-key "$PK"
@@ -316,14 +319,25 @@ send-withdrawal amount="1000000" to="" token="0x20C00000000000000000000000000000
     done
 
 [group('zone')]
-[doc('Enables a TIP-20 token on the ZonePortal for bridging. Token can be an address or alias (pathusd, alphausd, betausd). Requires L1_RPC_URL, L1_PORTAL_ADDRESS, and SEQUENCER_KEY env vars.')]
+[doc('Enables a TIP-20 token on the ZonePortal for bridging. Token can be an address or alias (pathusd, alphausd, betausd). Requires L1_RPC_URL, L1_PORTAL_ADDRESS, and ADMIN_KEY env vars. SEQUENCER_KEY works for legacy zones where admin == sequencer.')]
 enable-token token:
     #!/bin/bash
     set -euo pipefail
     RPC="${L1_RPC_URL:?Set L1_RPC_URL env var}"
-    PK="${SEQUENCER_KEY:?Set SEQUENCER_KEY env var (only the sequencer can enable tokens)}"
+    PK="${ADMIN_KEY:-${SEQUENCER_KEY:-}}"
+    if [[ -z "$PK" ]]; then
+        echo "Set ADMIN_KEY env var (or SEQUENCER_KEY for legacy zones where admin == sequencer)" >&2
+        exit 1
+    fi
     PORTAL="${L1_PORTAL_ADDRESS:?Set L1_PORTAL_ADDRESS env var}"
     HTTP_RPC=$(echo "$RPC" | sed 's|^wss://|https://|' | sed 's|^ws://|http://|')
+    # enableToken is onlyAdmin: reject the sequencer fallback unless it is the admin.
+    SIGNER_ADDR=$(cast wallet address "$PK" | tr '[:upper:]' '[:lower:]')
+    ONCHAIN_ADMIN=$(cast call "$PORTAL" "admin()(address)" --rpc-url "$HTTP_RPC" | tr '[:upper:]' '[:lower:]')
+    if [[ "$SIGNER_ADDR" != "$ONCHAIN_ADMIN" ]]; then
+        echo "Signer $SIGNER_ADDR is not the portal admin $ONCHAIN_ADMIN. Set ADMIN_KEY for this zone (SEQUENCER_KEY only works when admin == sequencer)." >&2
+        exit 1
+    fi
     TOKEN="{{token}}"
     # Resolve well-known aliases (lowercased for case-insensitive matching)
     TOKEN_LOWER=$(echo "$TOKEN" | tr '[:upper:]' '[:lower:]')
@@ -359,6 +373,55 @@ enable-token token:
         fi
         sleep 0.5
     done
+
+# Shared implementation for admin-only portal calls that take a single token
+# argument (pauseDeposits / resumeDeposits). Resolves the token alias, signs with
+# ADMIN_KEY (SEQUENCER_KEY fallback only when it is the on-chain admin).
+[private]
+_portal-admin-token-call action token:
+    #!/bin/bash
+    set -euo pipefail
+    RPC="${L1_RPC_URL:?Set L1_RPC_URL env var}"
+    PK="${ADMIN_KEY:-${SEQUENCER_KEY:-}}"
+    if [[ -z "$PK" ]]; then
+        echo "Set ADMIN_KEY env var (or SEQUENCER_KEY for legacy zones where admin == sequencer)" >&2
+        exit 1
+    fi
+    PORTAL="${L1_PORTAL_ADDRESS:?Set L1_PORTAL_ADDRESS env var}"
+    HTTP_RPC=$(echo "$RPC" | sed 's|^wss://|https://|' | sed 's|^ws://|http://|')
+    # {{action}} is onlyAdmin: reject the sequencer fallback unless it is the admin.
+    SIGNER_ADDR=$(cast wallet address "$PK" | tr '[:upper:]' '[:lower:]')
+    ONCHAIN_ADMIN=$(cast call "$PORTAL" "admin()(address)" --rpc-url "$HTTP_RPC" | tr '[:upper:]' '[:lower:]')
+    if [[ "$SIGNER_ADDR" != "$ONCHAIN_ADMIN" ]]; then
+        echo "Signer $SIGNER_ADDR is not the portal admin $ONCHAIN_ADMIN. Set ADMIN_KEY for this zone (SEQUENCER_KEY only works when admin == sequencer)." >&2
+        exit 1
+    fi
+    TOKEN="{{token}}"
+    TOKEN_LOWER=$(echo "$TOKEN" | tr '[:upper:]' '[:lower:]')
+    case "$TOKEN_LOWER" in
+        pathusd|path-usd|path_usd)
+            TOKEN="0x20C0000000000000000000000000000000000000" ;;
+        alphausd|alpha-usd|alpha_usd)
+            TOKEN="0x20c0000000000000000000000000000000000001" ;;
+        betausd|beta-usd|beta_usd)
+            TOKEN="0x20c0000000000000000000000000000000000002" ;;
+    esac
+    echo "Calling {{action}}($TOKEN) on portal $PORTAL..."
+    TX_OUTPUT=$(cast send "$PORTAL" "{{action}}(address)" "$TOKEN" \
+        --rpc-url "$HTTP_RPC" --private-key "$PK" --json)
+    TX_HASH=$(echo "$TX_OUTPUT" | jq -r '.transactionHash')
+    echo "L1 tx: $TX_HASH"
+    echo "Explorer: https://explore.moderato.tempo.xyz/tx/$TX_HASH"
+
+[group('zone')]
+[doc('Pauses deposits for an enabled TIP-20 on the ZonePortal (withdrawals unaffected). Token can be an address or alias. Requires L1_RPC_URL, L1_PORTAL_ADDRESS, and ADMIN_KEY env vars.')]
+pause-deposits token:
+    just _portal-admin-token-call pauseDeposits {{token}}
+
+[group('zone')]
+[doc('Resumes deposits for a previously paused TIP-20 on the ZonePortal. Token can be an address or alias. Requires L1_RPC_URL, L1_PORTAL_ADDRESS, and ADMIN_KEY env vars.')]
+resume-deposits token:
+    just _portal-admin-token-call resumeDeposits {{token}}
 
 [group('zone')]
 [doc('Lists TIP-20 token addresses currently enabled on the ZonePortal. Pass a portal address or set L1_PORTAL_ADDRESS. Requires L1_RPC_URL.')]
@@ -643,12 +706,13 @@ check-balance-private name token="0x20C0000000000000000000000000000000000000" rp
     echo "Balance of $ACCOUNT: $BALANCE"
 
 [group('zone')]
-[doc('End-to-end: generates a sequencer key, funds it on L1, creates a zone on-chain, generates genesis, and starts the zone node. Optional second positional argument selects the initial TIP-20 enabled on the portal; defaults to pathUSD. Requires L1_RPC_URL env var.')]
+[doc('End-to-end: generates a sequencer key, funds it on L1, creates a zone on-chain, generates genesis, and starts the zone node. Optional second positional argument selects the initial TIP-20 enabled on the portal; defaults to pathUSD. Requires L1_RPC_URL and ZONE_FACTORY env vars.')]
 deploy-zone name token="":
     #!/bin/bash
     set -euo pipefail
     L1_RPC="${L1_RPC_URL:?Set L1_RPC_URL env var (wss://...)}"
     HTTP_RPC=$(echo "$L1_RPC" | sed 's|^wss://|https://|' | sed 's|^ws://|http://|')
+    ZONE_FACTORY="${ZONE_FACTORY:?Set ZONE_FACTORY env var}"
     OUTPUT="generated/{{name}}"
     ZONE_TOKEN_L1="{{token}}"
     if [[ -z "$ZONE_TOKEN_L1" ]]; then
@@ -697,14 +761,16 @@ deploy-zone name token="":
     cargo run -p tempo-xtask -- create-zone \
         --output "$OUTPUT" \
         --l1-rpc-url "$HTTP_RPC" \
+        --zone-factory "$ZONE_FACTORY" \
         --initial-token "$ZONE_TOKEN_L1" \
         --sequencer "$SEQUENCER_ADDR" \
         --private-key "$SEQUENCER_KEY"
     echo ""
 
-    # Save sequencer key into zone.json for later use
+    # Save generated keys into zone.json for later use. deploy-zone uses the
+    # sequencer as the portal admin unless --admin is added to create-zone.
     jq --arg sk "$SEQUENCER_KEY" --arg sa "$SEQUENCER_ADDR" \
-        '. + {sequencerKey: $sk, sequencerAddress: $sa}' "$OUTPUT/zone.json" > "$OUTPUT/zone.json.tmp" \
+        '. + {sequencerKey: $sk, sequencerAddress: $sa, adminKey: $sk, adminAddress: $sa}' "$OUTPUT/zone.json" > "$OUTPUT/zone.json.tmp" \
         && mv "$OUTPUT/zone.json.tmp" "$OUTPUT/zone.json"
 
     PORTAL=$(jq -r '.portal' "$OUTPUT/zone.json")
