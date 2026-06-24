@@ -706,14 +706,12 @@ impl ZoneMonitor {
                     if !batch_data.withdrawal_queue_hash.is_zero() {
                         if !withdrawals.is_empty() {
                             let portal_slot = self.portal_withdrawal_queue_tail;
+                            let count = withdrawals.len();
                             let mut store = self.withdrawal_store.lock();
-                            for w in &withdrawals {
-                                store.add_withdrawal(portal_slot, w.clone());
-                            }
+                            store.add_batch(portal_slot, withdrawals);
                             info!(
                                 portal_slot,
-                                count = withdrawals.len(),
-                                "Stored withdrawals for portal queue slot"
+                                count, "Stored withdrawals for portal queue slot"
                             );
                         }
                         self.portal_withdrawal_queue_tail += 1;
