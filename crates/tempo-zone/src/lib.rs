@@ -4,6 +4,8 @@
 #![allow(unnameable_types)]
 #![allow(clippy::too_many_arguments)]
 use eyre as _;
+use reth_evm as _;
+use reth_metrics as _;
 
 pub mod abi;
 #[cfg(feature = "cli")]
@@ -14,7 +16,6 @@ pub mod batch;
 pub mod engine;
 pub mod l1;
 pub mod l1_state;
-mod metrics;
 mod node;
 pub mod nonce_keys;
 pub mod payload;
