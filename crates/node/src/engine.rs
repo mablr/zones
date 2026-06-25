@@ -51,10 +51,8 @@ use tempo_chainspec::spec::TempoChainSpec;
 use tempo_primitives::TempoHeader;
 use tracing::{error, warn};
 
-use crate::{
-    DepositQueue, L1BlockDeposits,
-    payload::{ZonePayloadAttributes, ZonePayloadTypes},
-};
+use zone_l1::{DepositQueue, L1BlockDeposits, PolicyProvider, PreparedL1Block};
+use zone_payload::{ZonePayloadAttributes, ZonePayloadTypes};
 
 /// Engine that drives L2 block production from L1 events.
 ///
@@ -88,7 +86,7 @@ pub struct ZoneEngine {
     portal_address: Address,
     /// Cache-first, RPC-fallback TIP-403 policy provider for authorization checks
     /// on encrypted deposit recipients during preparation.
-    policy_provider: crate::l1_state::PolicyProvider,
+    policy_provider: PolicyProvider,
 }
 
 impl ZoneEngine {
@@ -101,7 +99,7 @@ impl ZoneEngine {
         fee_recipient: Address,
         sequencer_key: k256::SecretKey,
         portal_address: Address,
-        policy_provider: crate::l1_state::PolicyProvider,
+        policy_provider: PolicyProvider,
     ) -> Self {
         Self {
             chain_spec,
@@ -188,10 +186,7 @@ impl ZoneEngine {
     /// ABI-encode everything into a [`PreparedL1Block`] ready for the payload
     /// builder. Errors (e.g. policy RPC failures) are propagated so the engine
     /// retries rather than allowing unauthorized deposits through.
-    async fn prepare_l1_block(
-        &self,
-        l1_block: L1BlockDeposits,
-    ) -> eyre::Result<crate::l1::PreparedL1Block> {
+    async fn prepare_l1_block(&self, l1_block: L1BlockDeposits) -> eyre::Result<PreparedL1Block> {
         l1_block
             .prepare(
                 &self.sequencer_key,

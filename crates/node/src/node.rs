@@ -4,18 +4,8 @@
 //! It reuses Tempo's EVM, primitives, and pool, but with noop consensus/network/payload.
 
 use crate::{
-    BatchAnchorConfig, DepositQueue, L1SubscriberConfig, PolicyCache, ZoneEngine,
-    ZoneSequencerConfig,
-    abi::{TEMPO_STATE_ADDRESS, ZONE_INBOX_ADDRESS, ZONE_OUTBOX_ADDRESS, ZonePortal},
-    ext::TempoStateExt,
-    l1::L1Subscriber,
-    l1_state::{
-        L1StateCache, L1StateProvider, L1StateProviderConfig, PolicyProvider,
-        spawn_policy_resolution_task, spawn_pool_prefetch_task,
-    },
-    payload::{ZonePayloadAttributes, ZonePayloadFactory, ZonePayloadTypes},
+    ZoneEngine,
     rpc::{ZoneRpc, ZoneRpcApi, rpc_connection_config, start_private_rpc},
-    spawn_zone_sequencer,
 };
 use alloy_primitives::Address;
 use alloy_provider::Provider as _;
@@ -63,8 +53,20 @@ use tempo_transaction_pool::{
     transaction::TempoPooledTransaction,
     validator::{DEFAULT_MAX_TEMPO_AUTHORIZATIONS, TempoTransactionValidator},
 };
+use tempo_zone_contracts::{
+    TEMPO_STATE_ADDRESS, ZONE_INBOX_ADDRESS, ZONE_OUTBOX_ADDRESS, ZonePortal,
+};
 use tracing::{debug, info};
 use zone_evm::ZoneEvmConfig;
+use zone_l1::{
+    DepositQueue, L1Subscriber, L1SubscriberConfig, PolicyCache, TempoStateExt,
+    state::{
+        L1StateCache, L1StateProvider, L1StateProviderConfig, PolicyProvider,
+        spawn_policy_resolution_task, spawn_pool_prefetch_task,
+    },
+};
+use zone_payload::{ZonePayloadAttributes, ZonePayloadFactory, ZonePayloadTypes};
+use zone_sequencer::{BatchAnchorConfig, ZoneSequencerConfig, spawn_zone_sequencer};
 
 /// Network primitives for Zone Nodes
 type ZoneNetworkPrimitives = BasicNetworkPrimitives<TempoPrimitives, TempoTxEnvelope>;
@@ -109,7 +111,7 @@ pub struct ZoneNode {
     l1_state_provider_config: L1StateProviderConfig,
     /// Shared L1 state cache (enabled tokens, zone metadata, etc.).
     l1_state_cache: L1StateCache,
-    /// Shared TIP-403 policy cache, populated by the unified [`L1Subscriber`](crate::l1::L1Subscriber)
+    /// Shared TIP-403 policy cache, populated by the unified [`L1Subscriber`](zone_l1::L1Subscriber)
     /// and read by the precompile during block building.
     policy_cache: PolicyCache,
     /// Address of the L1 deposit portal contract.

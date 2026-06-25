@@ -12,9 +12,10 @@ use tempo_chainspec::spec::{TempoChainSpec, TempoChainSpecParser};
 use zone_evm::ZoneEvmConfig;
 
 use crate::{
-    BatchAnchorConfig, ZoneNode, ZonePrivateRpcConfig, ZoneSequencerAddOnsConfig,
+    ZoneNode, ZonePrivateRpcConfig, ZoneSequencerAddOnsConfig,
     rpc::auth::DEFAULT_MAX_AUTH_TOKEN_VALIDITY_SECS,
 };
+use zone_sequencer::BatchAnchorConfig;
 
 const MAX_LOGS_PER_RESPONSE: u64 = 1_000_000;
 const MAX_BLOCKS_PER_FILTER: u64 = 1_000_000;

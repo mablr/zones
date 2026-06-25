@@ -1,7 +1,7 @@
 //! [`ZoneRpcApi`] implementation backed by reth's EthApi.
 //!
 //! Re-exports the standalone `zone-rpc` crate so everything is accessible
-//! via `zone::rpc::*`.
+//! via `zone_node::rpc::*`.
 
 pub use zone_rpc::*;
 
@@ -44,10 +44,10 @@ use tokio::{
     time::{MissedTickBehavior, interval},
 };
 
-use crate::abi::{
+use alloy_rpc_client::ConnectionConfig;
+use tempo_zone_contracts::{
     DepositType, TEMPO_STATE_ADDRESS, ZONE_INBOX_ADDRESS, ZONE_TOKEN_ADDRESS, ZoneInbox, ZonePortal,
 };
-use alloy_rpc_client::ConnectionConfig;
 use zone_rpc::{
     auth::AuthContext,
     types::{
@@ -139,8 +139,10 @@ pub struct ZoneRpc<Api: EthApiTypes> {
     config: zone_rpc::PrivateRpcConfig,
     l1_provider: DynProvider<TempoNetwork>,
     zone_provider: DynProvider<TempoNetwork>,
-    tempo_state:
-        crate::abi::TempoState::TempoStateInstance<DynProvider<TempoNetwork>, TempoNetwork>,
+    tempo_state: tempo_zone_contracts::TempoState::TempoStateInstance<
+        DynProvider<TempoNetwork>,
+        TempoNetwork,
+    >,
     /// Maps filter IDs to the authenticated account that created them.
     /// The reth filter registry remains the source of truth for filter liveness.
     filter_owners: Arc<Mutex<HashMap<FilterId, Address>>>,
@@ -170,7 +172,8 @@ impl<Api: EthApiTypes + 'static> ZoneRpc<Api> {
             .await
             .wrap_err("failed to connect private RPC zone provider")?
             .erased();
-        let tempo_state = crate::abi::TempoState::new(TEMPO_STATE_ADDRESS, zone_provider.clone());
+        let tempo_state =
+            tempo_zone_contracts::TempoState::new(TEMPO_STATE_ADDRESS, zone_provider.clone());
         let rpc = Self {
             eth,
             config,
