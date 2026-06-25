@@ -7,11 +7,9 @@ on:
     branches: [main]
     paths-ignore:
       - "specs/ref-impls/**"
-      - ".github/workflows/specs.yml"
   pull_request:
     paths-ignore:
       - "specs/ref-impls/**"
-      - ".github/workflows/specs.yml"
   merge_group:
 
 concurrency:
@@ -35,7 +33,7 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2 # nightly
         with:
           # Pin nightly to avoid breakage from str::as_str() stabilization
           # which breaks shellexpand 3.1.1 method resolution.
@@ -65,7 +63,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2 # nightly
         with:
           toolchain: nightly-2026-02-21
           components: rustfmt
