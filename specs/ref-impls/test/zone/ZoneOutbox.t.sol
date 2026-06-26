@@ -497,6 +497,83 @@ contract ZoneOutboxTest is Test {
                       TOKEN TRANSFER TESTS
     //////////////////////////////////////////////////////////////*/
 
+    /// @notice Verifies the sender is debited `amount + fee` when a gas rate is configured.
+    /// @dev With the default zero gas rate the fee is always zero, so `amount + fee` reads
+    ///      the same as `amount`; a non-zero rate and gas limit make the fee observable.
+    ///      The expected fee hardcodes WITHDRAWAL_BASE_GAS (50_000) so a mutated base-gas
+    ///      constant is also caught.
+    function test_requestWithdrawal_burnsAmountPlusFee() public {
+        uint128 rate = 3;
+        uint64 gasLimit = 100_000;
+        vm.prank(sequencer);
+        outbox.setTempoGasRate(rate);
+
+        uint128 amount = 500e6;
+        uint128 expectedFee = uint128(50_000 + gasLimit) * rate;
+        assertGt(expectedFee, 0);
+
+        uint256 aliceBefore = zoneToken.balanceOf(alice);
+        uint256 supplyBefore = zoneToken.totalSupply();
+
+        vm.startPrank(alice);
+        zoneToken.approve(address(outbox), amount + expectedFee);
+        outbox.requestWithdrawal(address(zoneToken), bob, amount, bytes32(0), gasLimit, alice, "");
+        vm.stopPrank();
+
+        assertEq(zoneToken.balanceOf(alice), aliceBefore - amount - expectedFee);
+        assertEq(zoneToken.totalSupply(), supplyBefore - amount - expectedFee);
+    }
+
+    /// @notice Callback data exactly at the maximum size is accepted (boundary is inclusive).
+    /// @dev Guards `data.length > MAX` against `>=`/`==` mutants, which would reject MAX bytes.
+    function test_requestWithdrawal_callbackDataAtMaxSize_succeeds() public {
+        bytes memory data = new bytes(outbox.MAX_CALLBACK_DATA_SIZE());
+
+        uint256 supplyBefore = zoneToken.totalSupply();
+        vm.startPrank(alice);
+        zoneToken.approve(address(outbox), 500e6);
+        outbox.requestWithdrawal(address(zoneToken), bob, 500e6, bytes32(0), 0, alice, data);
+        vm.stopPrank();
+
+        assertEq(zoneToken.totalSupply(), supplyBefore - 500e6);
+    }
+
+    /// @notice Callback data one byte over the maximum reverts.
+    function test_requestWithdrawal_callbackDataAboveMax_reverts() public {
+        bytes memory data = new bytes(outbox.MAX_CALLBACK_DATA_SIZE() + 1);
+
+        vm.startPrank(alice);
+        zoneToken.approve(address(outbox), 500e6);
+        vm.expectRevert(ZoneOutbox.CallbackDataTooLarge.selector);
+        outbox.requestWithdrawal(address(zoneToken), bob, 500e6, bytes32(0), 0, alice, data);
+        vm.stopPrank();
+    }
+
+    /// @notice Finalizing with a count above the true pending count clamps via length - head.
+    /// @dev After the queue head advances, pending must subtract the head. `+`/`^`/`|` mutants
+    ///      over-report pending, so an over-large count would escape clamping and the
+    ///      encrypted-sender length check would mismatch and revert.
+    function test_finalizeWithdrawalBatch_clampsUsingLengthMinusHead() public {
+        vm.startPrank(alice);
+        zoneToken.approve(address(outbox), 4 * 500e6);
+        for (uint256 i = 0; i < 4; i++) {
+            outbox.requestWithdrawal(address(zoneToken), bob, 500e6, bytes32(0), 0, alice, "");
+        }
+        vm.stopPrank();
+
+        // Finalize the first two, advancing the head to 2 (two remain pending).
+        _finalizeWithdrawalBatch(2);
+        assertEq(outbox.pendingWithdrawalsCount(), 2);
+
+        // Request count = 4 (> real pending 2) but supply only the 2 valid encrypted senders.
+        // Correct code clamps to 2 and succeeds; an additive-head mutant expects 4 and reverts.
+        // Build the senders array before the prank: the getter call would consume it otherwise.
+        bytes[] memory senders = _emptyEncryptedSenders(4);
+        vm.prank(sequencer);
+        outbox.finalizeWithdrawalBatch(4, uint64(block.number), senders);
+        assertEq(outbox.pendingWithdrawalsCount(), 0);
+    }
+
     function test_requestWithdrawal_transfersFromSender() public {
         uint256 aliceBalanceBefore = zoneToken.balanceOf(alice);
 
@@ -989,6 +1066,100 @@ contract ZoneOutboxTest is Test {
         outbox.setMaxWithdrawalsPerBlock(0);
         assertEq(outbox.maxWithdrawalsPerBlock(), 0);
         vm.stopPrank();
+    }
+
+    /// @notice Sequencer updates the Tempo gas rate and emits the new value.
+    function test_setTempoGasRate_sequencerCanSetAndEmit() public {
+        uint128 rate = 7;
+
+        vm.prank(sequencer);
+        vm.expectEmit(false, false, false, true);
+        emit IZoneOutbox.TempoGasRateUpdated(rate);
+        outbox.setTempoGasRate(rate);
+
+        assertEq(outbox.tempoGasRate(), rate);
+    }
+
+    /// @notice Only the sequencer can update the Tempo gas rate.
+    function test_setTempoGasRate_onlySequencer() public {
+        vm.prank(alice);
+        vm.expectRevert(ZoneOutbox.OnlySequencer.selector);
+        outbox.setTempoGasRate(1);
+    }
+
+    /// @notice Withdrawal fee matches base plus callback gas times Tempo gas rate.
+    function testFuzz_calculateWithdrawalFee(uint64 gasLimit, uint128 tempoGasRate) public {
+        tempoGasRate = uint128(bound(tempoGasRate, 0, outbox.MAX_GAS_FEE_RATE()));
+        uint64 maxGasLimit = outbox.MAX_WITHDRAWAL_GAS_LIMIT();
+
+        vm.prank(sequencer);
+        outbox.setTempoGasRate(tempoGasRate);
+
+        if (gasLimit > maxGasLimit) {
+            vm.expectRevert(ZoneOutbox.GasLimitTooHigh.selector);
+            outbox.calculateWithdrawalFee(gasLimit);
+        } else {
+            uint128 expected = uint128(outbox.WITHDRAWAL_BASE_GAS() + gasLimit) * tempoGasRate;
+            assertEq(outbox.calculateWithdrawalFee(gasLimit), expected);
+        }
+    }
+
+    /// @notice Zero-count finalization advances the batch index without dequeuing.
+    function test_finalizeWithdrawalBatch_zeroCountWithPending_advancesBatchOnly() public {
+        vm.startPrank(alice);
+        zoneToken.approve(address(outbox), 500e6);
+        outbox.requestWithdrawal(address(zoneToken), bob, 500e6, bytes32(0), 0, alice, "");
+        vm.stopPrank();
+
+        bytes32 hash = _finalizeWithdrawalBatch(0);
+        LastBatch memory batch = outbox.lastBatch();
+
+        assertEq(hash, bytes32(0));
+        assertEq(outbox.pendingWithdrawalsCount(), 1);
+        assertEq(outbox.withdrawalBatchIndex(), 1);
+        assertEq(batch.withdrawalQueueHash, bytes32(0));
+        assertEq(batch.withdrawalBatchIndex, 1);
+    }
+
+    /// @notice Zero gas limit withdrawals still store callback data in the hash.
+    function test_requestWithdrawal_zeroGasLimitStoresCallbackData() public {
+        bytes memory data = "simple-with-data";
+
+        vm.startPrank(alice);
+        zoneToken.approve(address(outbox), 500e6);
+        outbox.requestWithdrawal(address(zoneToken), bob, 500e6, bytes32("memo"), 0, alice, data);
+        vm.stopPrank();
+
+        Withdrawal memory w = _withdrawal(1, alice, bob, 500e6, bytes32("memo"), 0, alice, data);
+        assertEq(_finalizeWithdrawalBatch(1), keccak256(abi.encode(w, EMPTY_SENTINEL)));
+    }
+
+    /// @notice Finalized withdrawal hashes chain in reverse dequeue order.
+    function testFuzz_finalizeWithdrawalBatch_hashChainOrder(uint8 rawCount) public {
+        uint256 count = bound(rawCount, 1, 8);
+        address[3] memory senders = [alice, bob, charlie];
+        Withdrawal[] memory withdrawals = new Withdrawal[](count);
+
+        for (uint256 i = 0; i < count; i++) {
+            address sender = senders[i % senders.length];
+            uint128 amount = uint128((i + 1) * 10e6);
+            bytes32 memo = bytes32(i + 1);
+
+            vm.startPrank(sender);
+            zoneToken.approve(address(outbox), amount);
+            outbox.requestWithdrawal(address(zoneToken), sender, amount, memo, 0, alice, "");
+            vm.stopPrank();
+
+            withdrawals[i] = _withdrawal(i + 1, sender, sender, amount, memo, 0, alice, "");
+        }
+
+        bytes32 expectedHash = EMPTY_SENTINEL;
+        for (uint256 i = count; i > 0; i--) {
+            expectedHash = keccak256(abi.encode(withdrawals[i - 1], expectedHash));
+        }
+
+        assertEq(_finalizeWithdrawalBatch(count), expectedHash);
+        assertEq(outbox.pendingWithdrawalsCount(), 0);
     }
 
 }

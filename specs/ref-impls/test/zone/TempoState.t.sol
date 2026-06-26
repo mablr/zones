@@ -348,21 +348,30 @@ contract TempoStateTest is Test {
         // 4: transactionsRoot, 5: receiptsRoot, 6: logsBloom, 7: difficulty,
         // 8: number, 9: gasLimit, 10: gasUsed, 11: timestamp, 12+: extra fields
 
-        bytes memory content = abi.encodePacked(
+        // Encoded in three chunks (instead of one 19-argument abi.encodePacked) so the field
+        // encodings are not all live on the stack at once. abi.encodePacked is plain
+        // concatenation, so the resulting bytes are identical to a single packed call; this only
+        // keeps the function within the stack limit when compiled under coverage's minimum-
+        // optimization viaIR pipeline.
+        bytes memory head = abi.encodePacked(
             _encodeBytes32(parentHash), // 0: parentHash
             _encodeBytes32(keccak256("ommersHash")), // 1: ommersHash
             _encodeAddress(beneficiary), // 2: beneficiary
             _encodeBytes32(stateRoot), // 3: stateRoot
             _encodeBytes32(transactionsRoot), // 4: transactionsRoot
             _encodeBytes32(receiptsRoot), // 5: receiptsRoot
-            _encodeBloom(), // 6: logsBloom (256 bytes)
+            _encodeBloom() // 6: logsBloom (256 bytes)
+        );
+        bytes memory mid = abi.encodePacked(
             _encodeUint64(0), // 7: difficulty
             _encodeUint64(number), // 8: number
             _encodeUint64(30_000_000), // 9: gasLimit
             _encodeUint64(0), // 10: gasUsed
             _encodeUint64(timestamp), // 11: timestamp
             _encodeBytes(bytes("")), // 12: extraData
-            _encodeBytes32(bytes32(0)), // 13: mixHash
+            _encodeBytes32(bytes32(0)) // 13: mixHash
+        );
+        bytes memory tail = abi.encodePacked(
             _encodeBytes8(bytes8(0)), // 14: nonce
             _encodeUint64(1_000_000_000), // 15: baseFeePerGas
             _encodeBytes32(bytes32(0)), // 16: withdrawalsRoot
@@ -370,7 +379,7 @@ contract TempoStateTest is Test {
             _encodeUint64(0) // 18: excessBlobGas
         );
 
-        return _encodeList(content);
+        return _encodeList(abi.encodePacked(head, mid, tail));
     }
 
     function _encodeBytes32(bytes32 value) internal pure returns (bytes memory) {
@@ -462,6 +471,73 @@ contract TempoStateTest is Test {
 
         vm.expectRevert(ITempoState.InvalidRlpData.selector);
         new TempoState(malformedHeader);
+    }
+
+    /// @notice Finalization rejects a later header with the wrong parent hash.
+    function test_finalizeTempo_revertsOnWrongParentHashAfterAdvance() public {
+        bytes memory header1 = _buildTempoHeader(
+            genesisBlockHash,
+            keccak256("stateRoot1"),
+            keccak256("receiptsRoot1"),
+            keccak256("txRoot1"),
+            address(0x1),
+            GENESIS_BLOCK_NUMBER + 1,
+            GENESIS_TIMESTAMP + 12
+        );
+
+        vm.prank(zoneInbox);
+        tempoState.finalizeTempo(header1);
+
+        bytes memory header2 = _buildTempoHeader(
+            genesisBlockHash,
+            keccak256("stateRoot2"),
+            keccak256("receiptsRoot2"),
+            keccak256("txRoot2"),
+            address(0x2),
+            GENESIS_BLOCK_NUMBER + 2,
+            GENESIS_TIMESTAMP + 24
+        );
+
+        vm.prank(zoneInbox);
+        vm.expectRevert(ITempoState.InvalidParentHash.selector);
+        tempoState.finalizeTempo(header2);
+    }
+
+    /// @notice Finalization rejects a later header with a skipped block number.
+    function test_finalizeTempo_revertsOnNonSequentialBlockNumberAfterAdvance() public {
+        bytes memory header1 = _buildTempoHeader(
+            genesisBlockHash,
+            keccak256("stateRoot1"),
+            keccak256("receiptsRoot1"),
+            keccak256("txRoot1"),
+            address(0x1),
+            GENESIS_BLOCK_NUMBER + 1,
+            GENESIS_TIMESTAMP + 12
+        );
+
+        vm.prank(zoneInbox);
+        tempoState.finalizeTempo(header1);
+
+        bytes memory header2 = _buildTempoHeader(
+            keccak256(header1),
+            keccak256("stateRoot2"),
+            keccak256("receiptsRoot2"),
+            keccak256("txRoot2"),
+            address(0x2),
+            GENESIS_BLOCK_NUMBER + 3,
+            GENESIS_TIMESTAMP + 24
+        );
+
+        vm.prank(zoneInbox);
+        vm.expectRevert(ITempoState.InvalidBlockNumber.selector);
+        tempoState.finalizeTempo(header2);
+    }
+
+    /// @notice Access control is enforced before malformed header decoding.
+    function test_finalizeTempo_revertsOnAccessControlBeforeDecodingHeader() public {
+        vm.prank(notZoneInbox);
+        vm.expectRevert(ITempoState.OnlyZoneInbox.selector);
+        tempoState.finalizeTempo(hex"01");
     }
 
 }
