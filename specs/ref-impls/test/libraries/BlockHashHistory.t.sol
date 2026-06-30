@@ -1,19 +1,20 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.13;
 
-import { BLOCKHASH_HISTORY_WINDOW, getBlockHash } from "../../src/libraries/BlockHashHistory.sol";
+import { getBlockHash } from "../../src/libraries/BlockHashHistory.sol";
 import { BaseTest } from "../BaseTest.t.sol";
 
 contract BlockHashHistoryTest is BaseTest {
 
-    /// @notice Verifies recent block numbers return the expected block hash.
+    /// @notice Verifies recent in-window blocks return the same hash as the BLOCKHASH opcode.
     function test_getBlockHash_returnsInWindowHash() public {
         vm.roll(10_000);
         uint256 blockNumber = block.number - 1;
 
         bytes32 hash = getBlockHash(blockNumber);
 
-        assertEq(hash, keccak256(abi.encode(blockNumber)));
+        assertEq(hash, blockhash(blockNumber));
+        assertTrue(hash != bytes32(0));
     }
 
     /// @notice Verifies blocks older than the history window return zero.

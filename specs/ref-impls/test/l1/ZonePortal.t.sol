@@ -30,7 +30,6 @@ import {
 import { ZoneFactory } from "../../src/l1/ZoneFactory.sol";
 import { ZoneMessenger } from "../../src/l1/ZoneMessenger.sol";
 import { ZonePortal } from "../../src/l1/ZonePortal.sol";
-import { BLOCKHASH_HISTORY_WINDOW } from "../../src/libraries/BlockHashHistory.sol";
 import { DepositQueueLib } from "../../src/libraries/DepositQueueLib.sol";
 import { EMPTY_SENTINEL, WithdrawalQueueLib } from "../../src/libraries/WithdrawalQueueLib.sol";
 import { WITHDRAWAL_QUEUE_CAPACITY } from "../../src/libraries/WithdrawalQueueLib.sol";
