@@ -1,0 +1,21 @@
+name: Scan GitHub Actions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+      - ".github/actions/**"
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - ".github/actions/**"
+
+permissions: {}
+
+jobs:
+  scan:
+    permissions:
+      actions: read
+      contents: read
+    uses: tempoxyz/gh-actions/.github/workflows/scan-github-actions.yml@8447c18476f091ea634dd1894951222e639009f9
