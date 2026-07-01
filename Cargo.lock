@@ -13436,6 +13436,7 @@ dependencies = [
  "alloy-sol-types",
  "const-hex",
  "k256",
+ "paste",
  "rand 0.8.6",
  "revm",
  "sha2 0.10.9",

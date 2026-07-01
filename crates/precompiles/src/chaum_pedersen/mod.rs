@@ -8,11 +8,12 @@
 //!
 //! Uses the NCC-audited [`k256`] crate (v0.13.4) for secp256k1 operations.
 
-use alloc::{borrow::Cow, vec::Vec};
+use alloc::vec::Vec;
 
-use alloy_evm::precompiles::{DynPrecompile, Precompile, PrecompileInput};
-use alloy_primitives::{Address, Bytes, address};
-use alloy_sol_types::SolCall;
+mod dispatch;
+
+use alloy_evm::precompiles::DynPrecompile;
+use alloy_primitives::{Address, address};
 use k256::{
     AffinePoint, ProjectivePoint, Scalar,
     elliptic_curve::{
@@ -20,8 +21,7 @@ use k256::{
         sec1::{FromEncodedPoint, ToEncodedPoint},
     },
 };
-use revm::precompile::{PrecompileId, PrecompileOutput, PrecompileResult};
-use tracing::{debug, warn};
+use revm::precompile::PrecompileId;
 
 /// Chaum-Pedersen Verify precompile address on Zone L2.
 pub const CHAUM_PEDERSEN_VERIFY_ADDRESS: Address =
@@ -30,9 +30,6 @@ pub const CHAUM_PEDERSEN_VERIFY_ADDRESS: Address =
 /// Gas cost for Chaum-Pedersen proof verification (two EC muls + hashing).
 const CP_VERIFY_GAS: u64 = 6_000;
 
-/// Precompile identifier.
-static CP_PRECOMPILE_ID: PrecompileId = PrecompileId::Custom(Cow::Borrowed("ChaumPedersenVerify"));
-
 alloy_sol_types::sol! {
     /// Chaum-Pedersen proof for ECDH shared secret derivation.
     struct ChaumPedersenProof {
@@ -40,17 +37,21 @@ alloy_sol_types::sol! {
         bytes32 c;
     }
 
-    /// Verify a Chaum-Pedersen proof of correct ECDH shared secret derivation.
-    function verifyProof(
-        bytes32 ephemeralPubX,
-        uint8 ephemeralPubYParity,
-        bytes32 sharedSecret,
-        uint8 sharedSecretYParity,
-        bytes32 sequencerPubX,
-        uint8 sequencerPubYParity,
-        ChaumPedersenProof proof
-    ) external view returns (bool valid);
+    interface IChaumPedersenVerify {
+        /// Verify a Chaum-Pedersen proof of correct ECDH shared secret derivation.
+        function verifyProof(
+            bytes32 ephemeralPubX,
+            uint8 ephemeralPubYParity,
+            bytes32 sharedSecret,
+            uint8 sharedSecretYParity,
+            bytes32 sequencerPubX,
+            uint8 sequencerPubYParity,
+            ChaumPedersenProof proof
+        ) external view returns (bool valid);
+    }
 }
+
+pub use IChaumPedersenVerify::verifyProofCall;
 
 /// Chaum-Pedersen DLOG equality proof verification precompile.
 ///
@@ -65,63 +66,39 @@ alloy_sol_types::sol! {
 /// - Check: `c == c'`
 pub struct ChaumPedersenVerify;
 
-impl Precompile for ChaumPedersenVerify {
-    fn precompile_id(&self) -> &PrecompileId {
-        &CP_PRECOMPILE_ID
-    }
-
-    fn call(&self, input: PrecompileInput<'_>) -> PrecompileResult {
-        let data = input.data;
-        if data.len() < 4 {
-            return Ok(PrecompileOutput::revert(0, Bytes::new(), input.reservoir));
-        }
-
-        let selector: [u8; 4] = data[..4].try_into().expect("len >= 4");
-        if selector != verifyProofCall::SELECTOR {
-            warn!(target: "zone::precompile", ?selector, "ChaumPedersenVerify: unknown selector");
-            return Ok(PrecompileOutput::revert(0, Bytes::new(), input.reservoir));
-        }
-
-        debug!(target: "zone::precompile", "ChaumPedersenVerify: verifyProof");
-
-        let call = match verifyProofCall::abi_decode(data) {
-            Ok(call) => call,
-            Err(_) => return Ok(PrecompileOutput::revert(0, Bytes::new(), input.reservoir)),
+impl ChaumPedersenVerify {
+    /// Wrap this precompile in a [`DynPrecompile`] with the Tempo storage context
+    /// required by the upstream dispatch macro.
+    pub fn create(
+        cfg: &revm::context::CfgEnv<tempo_chainspec::hardfork::TempoHardfork>,
+    ) -> DynPrecompile {
+        use tempo_precompiles::{
+            Precompile as _,
+            storage::{StorageCtx, evm::EvmPrecompileStorageProvider},
         };
 
-        let valid = verify_chaum_pedersen(
-            &call.ephemeralPubX.0,
-            call.ephemeralPubYParity,
-            &call.sharedSecret.0,
-            call.sharedSecretYParity,
-            &call.sequencerPubX.0,
-            call.sequencerPubYParity,
-            &call.proof.s.0,
-            &call.proof.c.0,
-        );
-
-        let encoded = verifyProofCall::abi_encode_returns(&valid);
-        Ok(PrecompileOutput::new(
-            CP_VERIFY_GAS,
-            encoded.into(),
-            input.reservoir,
-        ))
-    }
-}
-
-impl ChaumPedersenVerify {
-    /// Convert into a [`DynPrecompile`] for registration in a [`PrecompilesMap`].
-    pub fn into_dyn(self) -> DynPrecompile {
-        DynPrecompile::new(
+        let spec = cfg.spec;
+        let amsterdam_eip8037_enabled = cfg.enable_amsterdam_eip8037;
+        let gas_params = cfg.gas_params.clone();
+        DynPrecompile::new_stateful(
             PrecompileId::Custom("ChaumPedersenVerify".into()),
-            |input| Self.call(input),
-        )
-    }
-}
+            move |input| {
+                let mut storage = EvmPrecompileStorageProvider::new(
+                    input.internals,
+                    input.gas,
+                    input.reservoir,
+                    spec,
+                    amsterdam_eip8037_enabled,
+                    input.is_static,
+                    gas_params.clone(),
+                );
 
-impl From<ChaumPedersenVerify> for DynPrecompile {
-    fn from(value: ChaumPedersenVerify) -> Self {
-        value.into_dyn()
+                StorageCtx::enter(&mut storage, || {
+                    let mut precompile = Self;
+                    precompile.call(input.data, input.caller)
+                })
+            },
+        )
     }
 }
 

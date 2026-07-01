@@ -7,17 +7,17 @@
 //!
 //! Uses the NCC-audited [`aes-gcm`] crate (v0.10.3).
 
-use alloc::{borrow::Cow, vec::Vec};
+use alloc::vec::Vec;
 
 use aes_gcm::{
     Aes256Gcm, KeyInit, Nonce,
     aead::{Aead, Payload},
 };
-use alloy_evm::precompiles::{DynPrecompile, Precompile, PrecompileInput};
-use alloy_primitives::{Address, Bytes, address};
-use alloy_sol_types::SolCall;
-use revm::precompile::{PrecompileId, PrecompileOutput, PrecompileResult};
-use tracing::{debug, warn};
+mod dispatch;
+
+use alloy_evm::precompiles::DynPrecompile;
+use alloy_primitives::{Address, address};
+use revm::precompile::PrecompileId;
 
 /// AES-256-GCM Decrypt precompile address on Zone L2.
 pub const AES_GCM_DECRYPT_ADDRESS: Address = address!("0x1C00000000000000000000000000000000000101");
@@ -28,19 +28,20 @@ const AES_GCM_BASE_GAS: u64 = 1_000;
 /// Additional gas per byte of authenticated AES-GCM input.
 const AES_GCM_PER_BYTE_GAS: u64 = 3;
 
-/// Precompile identifier.
-static AES_GCM_PRECOMPILE_ID: PrecompileId = PrecompileId::Custom(Cow::Borrowed("AesGcmDecrypt"));
-
 alloy_sol_types::sol! {
-    /// Decrypt AES-256-GCM ciphertext and verify authentication tag.
-    function decrypt(
-        bytes32 key,
-        bytes12 nonce,
-        bytes ciphertext,
-        bytes aad,
-        bytes16 tag
-    ) external view returns (bytes plaintext, bool valid);
+    interface IAesGcmDecrypt {
+        /// Decrypt AES-256-GCM ciphertext and verify authentication tag.
+        function decrypt(
+            bytes32 key,
+            bytes12 nonce,
+            bytes ciphertext,
+            bytes aad,
+            bytes16 tag
+        ) external view returns (bytes plaintext, bool valid);
+    }
 }
+
+pub use IAesGcmDecrypt::{decryptCall, decryptReturn};
 
 /// AES-256-GCM decryption precompile.
 ///
@@ -49,62 +50,36 @@ alloy_sol_types::sol! {
 /// `(empty, false)` if tag verification fails.
 pub struct AesGcmDecrypt;
 
-impl Precompile for AesGcmDecrypt {
-    fn precompile_id(&self) -> &PrecompileId {
-        &AES_GCM_PRECOMPILE_ID
-    }
-
-    fn call(&self, input: PrecompileInput<'_>) -> PrecompileResult {
-        let data = input.data;
-        if data.len() < 4 {
-            return Ok(PrecompileOutput::revert(0, Bytes::new(), input.reservoir));
-        }
-
-        let selector: [u8; 4] = data[..4].try_into().expect("len >= 4");
-        if selector != decryptCall::SELECTOR {
-            warn!(target: "zone::precompile", ?selector, "AesGcmDecrypt: unknown selector");
-            return Ok(PrecompileOutput::revert(0, Bytes::new(), input.reservoir));
-        }
-
-        debug!(target: "zone::precompile", "AesGcmDecrypt: decrypt");
-
-        let call = match decryptCall::abi_decode(data) {
-            Ok(call) => call,
-            Err(_) => return Ok(PrecompileOutput::revert(0, Bytes::new(), input.reservoir)),
-        };
-
-        let gas = AES_GCM_BASE_GAS
-            + AES_GCM_PER_BYTE_GAS * (call.ciphertext.len() + call.aad.len()) as u64;
-
-        let (plaintext, valid) = decrypt_aes_gcm(
-            &call.key.0,
-            &call.nonce.0,
-            &call.ciphertext,
-            &call.aad,
-            &call.tag.0,
-        );
-
-        let ret = decryptReturn {
-            plaintext: Bytes::from(plaintext),
-            valid,
-        };
-        let encoded = decryptCall::abi_encode_returns(&ret);
-        Ok(PrecompileOutput::new(gas, encoded.into(), input.reservoir))
-    }
-}
-
 impl AesGcmDecrypt {
-    /// Convert into a [`DynPrecompile`] for registration in a [`PrecompilesMap`].
-    pub fn into_dyn(self) -> DynPrecompile {
-        DynPrecompile::new(PrecompileId::Custom("AesGcmDecrypt".into()), |input| {
-            Self.call(input)
-        })
-    }
-}
+    /// Wrap this precompile in a [`DynPrecompile`] with the Tempo storage context
+    /// required by the upstream dispatch macro.
+    pub fn create(
+        cfg: &revm::context::CfgEnv<tempo_chainspec::hardfork::TempoHardfork>,
+    ) -> DynPrecompile {
+        use tempo_precompiles::{
+            Precompile as _,
+            storage::{StorageCtx, evm::EvmPrecompileStorageProvider},
+        };
 
-impl From<AesGcmDecrypt> for DynPrecompile {
-    fn from(value: AesGcmDecrypt) -> Self {
-        value.into_dyn()
+        let spec = cfg.spec;
+        let amsterdam_eip8037_enabled = cfg.enable_amsterdam_eip8037;
+        let gas_params = cfg.gas_params.clone();
+        DynPrecompile::new_stateful(PrecompileId::Custom("AesGcmDecrypt".into()), move |input| {
+            let mut storage = EvmPrecompileStorageProvider::new(
+                input.internals,
+                input.gas,
+                input.reservoir,
+                spec,
+                amsterdam_eip8037_enabled,
+                input.is_static,
+                gas_params.clone(),
+            );
+
+            StorageCtx::enter(&mut storage, || {
+                let mut precompile = Self;
+                precompile.call(input.data, input.caller)
+            })
+        })
     }
 }
 
@@ -142,14 +117,22 @@ pub fn decrypt_aes_gcm(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_evm::EvmInternals;
-    use alloy_primitives::U256;
+    use alloy_evm::{
+        EvmInternals,
+        precompiles::{Precompile, PrecompileInput},
+    };
+    use alloy_primitives::{Bytes, U256};
+    use alloy_sol_types::SolCall;
     use revm::{
         Context,
         database::{CacheDB, EmptyDB},
         precompile::PrecompileOutput,
     };
     use tempo_chainspec::hardfork::TempoHardfork;
+    use tempo_precompiles::{
+        charge_input_cost,
+        storage::{StorageCtx, evm::EvmPrecompileStorageProvider},
+    };
 
     type TestContext = Context<
         revm::context::BlockEnv,
@@ -190,7 +173,8 @@ mod tests {
 
     fn call_precompile(calldata: Bytes) -> PrecompileOutput {
         let mut ctx = test_context();
-        AesGcmDecrypt
+        let cfg = revm::context::CfgEnv::<TempoHardfork>::default();
+        AesGcmDecrypt::create(&cfg)
             .call(PrecompileInput {
                 data: &calldata,
                 gas: u64::MAX,
@@ -203,6 +187,26 @@ mod tests {
                 internals: EvmInternals::from_context(&mut ctx),
             })
             .expect("precompile call succeeds")
+    }
+
+    fn charged_input_gas(calldata: &[u8]) -> u64 {
+        let mut ctx = test_context();
+        let cfg = revm::context::CfgEnv::<TempoHardfork>::default();
+        let mut provider = EvmPrecompileStorageProvider::new(
+            EvmInternals::from_context(&mut ctx),
+            u64::MAX,
+            0,
+            cfg.spec,
+            cfg.enable_amsterdam_eip8037,
+            true,
+            cfg.gas_params,
+        );
+        StorageCtx::enter(&mut provider, || {
+            let mut storage = StorageCtx::default();
+            let gas_before = storage.gas_used();
+            assert!(charge_input_cost(&mut storage, calldata).is_none());
+            storage.gas_used().saturating_sub(gas_before)
+        })
     }
 
     #[test]
@@ -275,16 +279,17 @@ mod tests {
         let call = encrypt(plaintext, &aad);
         let ciphertext_len = call.ciphertext.len();
         let aad_len = call.aad.len();
+        let calldata = call.abi_encode();
+        let expected_gas = charged_input_gas(&calldata)
+            + AES_GCM_BASE_GAS
+            + AES_GCM_PER_BYTE_GAS * (ciphertext_len + aad_len) as u64;
 
-        let output = call_precompile(call.abi_encode().into());
+        let output = call_precompile(calldata.into());
         let decoded = decryptCall::abi_decode_returns(&output.bytes).expect("decode return");
 
         assert!(decoded.valid);
         assert_eq!(decoded.plaintext, Bytes::copy_from_slice(plaintext));
-        assert_eq!(
-            output.gas_used,
-            AES_GCM_BASE_GAS + AES_GCM_PER_BYTE_GAS * (ciphertext_len + aad_len) as u64
-        );
+        assert_eq!(output.gas_used, expected_gas);
     }
 
     #[test]
@@ -292,16 +297,17 @@ mod tests {
         let plaintext = b"normal precompile path";
         let call = encrypt(plaintext, &[]);
         let ciphertext_len = call.ciphertext.len();
+        let calldata = call.abi_encode();
+        let expected_gas = charged_input_gas(&calldata)
+            + AES_GCM_BASE_GAS
+            + AES_GCM_PER_BYTE_GAS * ciphertext_len as u64;
 
-        let output = call_precompile(call.abi_encode().into());
+        let output = call_precompile(calldata.into());
         let decoded = decryptCall::abi_decode_returns(&output.bytes).expect("decode return");
 
         assert!(decoded.valid);
         assert_eq!(decoded.plaintext, Bytes::copy_from_slice(plaintext));
-        assert_eq!(
-            output.gas_used,
-            AES_GCM_BASE_GAS + AES_GCM_PER_BYTE_GAS * ciphertext_len as u64
-        );
+        assert_eq!(output.gas_used, expected_gas);
     }
 
     #[test]
