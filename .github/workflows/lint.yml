@@ -17,7 +17,3 @@ jobs:
     permissions:
       contents: read
     uses: tempoxyz/gh-actions/.github/workflows/rust-lint.yml@2ddd4a5c02d66ea0ef6d9857b20fd6c2416eb9f4
-    with:
-      # Pin nightly to avoid breakage from str::as_str() stabilization
-      # which breaks shellexpand 3.1.1 method resolution.
-      rust-toolchain: nightly-2026-02-21
