@@ -29,6 +29,7 @@ jobs:
           echo "$EVENTS_CERT" > "${{ runner.temp }}/cert"
 
           # EVENTS_ARGS may contain additional curl arguments, not just a URL.
+          # shellcheck disable=SC2086  # intentional word splitting: EVENTS_ARGS holds extra curl args
           curl -sf -o /dev/null -X POST $EVENTS_ARGS \
             -H "Content-Type: application/json" \
             --key "${{ runner.temp }}/key" \
@@ -266,6 +267,7 @@ jobs:
           printf '%s' "$PAYLOAD_B64" | base64 --decode > "${RUNNER_TEMP}/pr-audit-event.json"
 
           # EVENTS_ARGS may contain additional curl arguments, not just a URL.
+          # shellcheck disable=SC2086  # intentional word splitting: EVENTS_ARGS holds extra curl args
           curl -sf -o /dev/null -X POST $EVENTS_ARGS \
             -H "Content-Type: application/json" \
             --key "${RUNNER_TEMP}/key" \

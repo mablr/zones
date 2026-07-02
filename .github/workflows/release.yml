@@ -148,8 +148,8 @@ jobs:
           cp "$BINARY_PATH" "$BINARY_NAME"
           tar czf "$ARCHIVE_NAME" "$BINARY_NAME"
 
-          echo "archive_name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT
-          echo "archive_path=$ARCHIVE_NAME" >> $GITHUB_OUTPUT
+          echo "archive_name=$ARCHIVE_NAME" >> "$GITHUB_OUTPUT"
+          echo "archive_path=$ARCHIVE_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Generate checksums
         shell: bash
