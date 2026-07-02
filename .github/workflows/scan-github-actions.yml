@@ -1,4 +1,4 @@
-name: Scan GitHub Actions
+name: Scan
 
 on:
   push:
