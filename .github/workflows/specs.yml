@@ -36,7 +36,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Foundry
-        uses: tempoxyz/gh-actions/actions/setup-foundry@8447c18476f091ea634dd1894951222e639009f9
+        uses: tempoxyz/gh-actions/actions/setup-foundry@42795cb621272feef9075019c7ecbb27d893678f
         with:
           version: nightly
 
@@ -57,7 +57,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Foundry
-        uses: tempoxyz/gh-actions/actions/setup-foundry@8447c18476f091ea634dd1894951222e639009f9
+        uses: tempoxyz/gh-actions/actions/setup-foundry@42795cb621272feef9075019c7ecbb27d893678f
         with:
           version: nightly
 
@@ -95,7 +95,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust
-        uses: tempoxyz/gh-actions/actions/setup-rust-build@8447c18476f091ea634dd1894951222e639009f9
+        uses: tempoxyz/gh-actions/actions/setup-rust-build@42795cb621272feef9075019c7ecbb27d893678f
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
