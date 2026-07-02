@@ -29,14 +29,14 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - uses: tempoxyz/gh-actions/actions/setup-rust-build@522daf45baa691955122a3287df2bb2d2cef264f
+      - uses: tempoxyz/gh-actions/actions/setup-rust-build@6e064543a7d798ee556f2c14fa1859389674c6d6
         with:
           # Pin nightly to avoid breakage from str::as_str() stabilization
           # which breaks shellexpand 3.1.1 method resolution.
           toolchain: nightly-2026-02-21
           components: clippy
       - name: Install Foundry
-        uses: tempoxyz/gh-actions/actions/setup-foundry@522daf45baa691955122a3287df2bb2d2cef264f
+        uses: tempoxyz/gh-actions/actions/setup-foundry@6e064543a7d798ee556f2c14fa1859389674c6d6
         with:
           version: nightly
       - name: Build Solidity artifacts
@@ -57,7 +57,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: tempoxyz/gh-actions/actions/setup-rust-build@522daf45baa691955122a3287df2bb2d2cef264f
+      - uses: tempoxyz/gh-actions/actions/setup-rust-build@6e064543a7d798ee556f2c14fa1859389674c6d6
         with:
           toolchain: nightly-2026-02-21
           components: rustfmt
@@ -79,7 +79,7 @@ jobs:
   deny:
     permissions:
       contents: read
-    uses: tempoxyz/gh-actions/.github/workflows/cargo-deny.yml@522daf45baa691955122a3287df2bb2d2cef264f
+    uses: tempoxyz/gh-actions/.github/workflows/cargo-deny.yml@6e064543a7d798ee556f2c14fa1859389674c6d6
 
   lint-success:
     name: lint success
