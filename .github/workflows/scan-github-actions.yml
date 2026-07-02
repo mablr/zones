@@ -18,4 +18,4 @@ jobs:
     permissions:
       actions: read
       contents: read
-    uses: tempoxyz/gh-actions/.github/workflows/scan-github-actions.yml@42795cb621272feef9075019c7ecbb27d893678f
+    uses: tempoxyz/gh-actions/.github/workflows/scan-github-actions.yml@522daf45baa691955122a3287df2bb2d2cef264f
