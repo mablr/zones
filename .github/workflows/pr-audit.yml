@@ -9,15 +9,35 @@ on:
 permissions: {}
 
 jobs:
+  # Label-triggered audit -> read-only shared reusable
   audit:
+    if: github.event_name == 'pull_request'
     permissions:
       contents: read
-      issues: write
-      pull-requests: write
-    uses: tempoxyz/gh-actions/.github/workflows/pr-audit.yml@656109a25bd988bac138f9dd510a896c5b20ab9a
+    uses: tempoxyz/gh-actions/.github/workflows/pr-audit.yml@ea512c23155526b9568598eedfda985755c8246d
     with:
       environment: pr-audit
     secrets:
       EVENTS_KEY: ${{ secrets.EVENTS_KEY }}
       EVENTS_CERT: ${{ secrets.EVENTS_CERT }}
       EVENTS_ARGS: ${{ secrets.EVENTS_ARGS }}
+
+  # Comment-command audit -> caller-owned privileged job using the composite
+  audit-comment:
+    if: github.event_name == 'issue_comment' && github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    environment: pr-audit
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: tempoxyz/gh-actions/actions/pr-audit-comment@ea512c23155526b9568598eedfda985755c8246d
+        with:
+          command-regex: '^(?:@decofe\s+)?(?:cyclops\s+audit|derek\s+audit)\b'
+          permission-check-mode: association
+          organization: tempoxyz
+          events-key: ${{ secrets.EVENTS_KEY }}
+          events-cert: ${{ secrets.EVENTS_CERT }}
+          events-args: ${{ secrets.EVENTS_ARGS }}
+          github-token: ${{ github.token }}

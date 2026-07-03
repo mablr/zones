@@ -12,4 +12,4 @@ jobs:
       contents: read
       issues: write
       pull-requests: write
-    uses: tempoxyz/gh-actions/.github/workflows/label-prs.yml@656109a25bd988bac138f9dd510a896c5b20ab9a
+    uses: tempoxyz/gh-actions/.github/workflows/label-prs.yml@ea512c23155526b9568598eedfda985755c8246d

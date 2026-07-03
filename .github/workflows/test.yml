@@ -29,14 +29,14 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - uses: tempoxyz/gh-actions/actions/setup-rust-build@656109a25bd988bac138f9dd510a896c5b20ab9a
+      - uses: tempoxyz/gh-actions/actions/setup-rust-build@ea512c23155526b9568598eedfda985755c8246d
         with:
           toolchain: stable
       - uses: taiki-e/install-action@b8cecb83565409bcc297b2df6e77f030b2a468d5 # v2.82.0
         with:
           tool: nextest@0.9.124
       - name: Install Foundry
-        uses: tempoxyz/gh-actions/actions/setup-foundry@656109a25bd988bac138f9dd510a896c5b20ab9a
+        uses: tempoxyz/gh-actions/actions/setup-foundry@ea512c23155526b9568598eedfda985755c8246d
         with:
           version: nightly
       - name: Build Solidity artifacts
