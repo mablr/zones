@@ -58,7 +58,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: tempoxyz/gh-actions/actions/setup-rust-build@ea512c23155526b9568598eedfda985755c8246d
+      - uses: tempoxyz/gh-actions/actions/setup-rust-build@aa3bffab06ae17963818e139302b186d1f42ec8a
         with:
           toolchain: stable
           mold: "false"
@@ -99,7 +99,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: tempoxyz/gh-actions/actions/setup-rust-build@ea512c23155526b9568598eedfda985755c8246d
+        uses: tempoxyz/gh-actions/actions/setup-rust-build@aa3bffab06ae17963818e139302b186d1f42ec8a
         with:
           toolchain: stable
           targets: ${{ matrix.platform.target }}

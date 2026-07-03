@@ -14,7 +14,7 @@ jobs:
     if: github.event_name == 'pull_request'
     permissions:
       contents: read
-    uses: tempoxyz/gh-actions/.github/workflows/pr-audit.yml@ea512c23155526b9568598eedfda985755c8246d
+    uses: tempoxyz/gh-actions/.github/workflows/pr-audit.yml@aa3bffab06ae17963818e139302b186d1f42ec8a
     with:
       environment: pr-audit
     secrets:
@@ -32,7 +32,7 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - uses: tempoxyz/gh-actions/actions/pr-audit-comment@ea512c23155526b9568598eedfda985755c8246d
+      - uses: tempoxyz/gh-actions/actions/pr-audit-comment@aa3bffab06ae17963818e139302b186d1f42ec8a
         with:
           command-regex: '^(?:@decofe\s+)?(?:cyclops\s+audit|derek\s+audit)\b'
           permission-check-mode: association
