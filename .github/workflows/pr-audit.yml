@@ -14,7 +14,7 @@ jobs:
       contents: read
       issues: write
       pull-requests: write
-    uses: tempoxyz/gh-actions/.github/workflows/pr-audit.yml@f4fa13af0d2e7d194c19b66a0344b9bc597ad1ce
+    uses: tempoxyz/gh-actions/.github/workflows/pr-audit.yml@656109a25bd988bac138f9dd510a896c5b20ab9a
     with:
       environment: pr-audit
     secrets:

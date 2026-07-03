@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: tempoxyz/gh-actions/actions/setup-rust-build@6e064543a7d798ee556f2c14fa1859389674c6d6
+      - uses: tempoxyz/gh-actions/actions/setup-rust-build@656109a25bd988bac138f9dd510a896c5b20ab9a
         with:
           toolchain: stable
       - uses: taiki-e/install-action@b8cecb83565409bcc297b2df6e77f030b2a468d5 # v2.82.0
