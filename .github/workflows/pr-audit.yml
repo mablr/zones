@@ -14,9 +14,12 @@ jobs:
     if: github.event_name == 'pull_request'
     permissions:
       contents: read
-    uses: tempoxyz/gh-actions/.github/workflows/pr-audit.yml@a243d8b1441a34eef885bfecd455597b072e2f2d
+    uses: tempoxyz/gh-actions/.github/workflows/pr-audit.yml@e54b0aa0cfa6aefaceaaf94a15233cd6278714a9
     with:
       environment: pr-audit
+      required-labels: |
+        cyclops
+        agentic-audit
     secrets:
       EVENTS_KEY: ${{ secrets.EVENTS_KEY }}
       EVENTS_CERT: ${{ secrets.EVENTS_CERT }}
@@ -24,7 +27,14 @@ jobs:
 
   # Comment-command audit -> caller-owned privileged job using the composite
   audit-comment:
-    if: github.event_name == 'issue_comment' && github.event.issue.pull_request
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      (
+        startsWith(github.event.comment.body, 'cyclops audit') ||
+        startsWith(github.event.comment.body, '@decofe cyclops audit') ||
+        startsWith(github.event.comment.body, 'derek audit')
+      )
     runs-on: ubuntu-latest
     environment: pr-audit
     permissions:
@@ -32,7 +42,7 @@ jobs:
       issues: write
       pull-requests: read
     steps:
-      - uses: tempoxyz/gh-actions/actions/pr-audit-comment@a243d8b1441a34eef885bfecd455597b072e2f2d
+      - uses: tempoxyz/gh-actions/actions/pr-audit-comment@e54b0aa0cfa6aefaceaaf94a15233cd6278714a9
         with:
           command-regex: '^(?:@decofe\s+)?(?:cyclops\s+audit|derek\s+audit)\b'
           permission-check-mode: association

@@ -16,7 +16,7 @@ jobs:
   rust:
     permissions:
       contents: read
-    uses: tempoxyz/gh-actions/.github/workflows/rust-lint.yml@a243d8b1441a34eef885bfecd455597b072e2f2d
+    uses: tempoxyz/gh-actions/.github/workflows/rust-lint.yml@e54b0aa0cfa6aefaceaaf94a15233cd6278714a9
 
   lint-success:
     name: lint success
