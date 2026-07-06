@@ -13432,8 +13432,10 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "alloy",
+ "alloy-consensus",
  "alloy-evm",
  "alloy-primitives",
+ "alloy-rlp",
  "alloy-sol-types",
  "const-hex",
  "k256",
@@ -13445,6 +13447,7 @@ dependencies = [
  "tempo-contracts",
  "tempo-precompiles",
  "tempo-precompiles-macros",
+ "tempo-primitives",
  "tempo-zone-contracts",
  "tracing",
  "zone-primitives",
