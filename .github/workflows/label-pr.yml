@@ -11,4 +11,4 @@ jobs:
     permissions:
       contents: read
       issues: write
-    uses: tempoxyz/gh-actions/.github/workflows/label-prs.yml@e54b0aa0cfa6aefaceaaf94a15233cd6278714a9
+    uses: tempoxyz/gh-actions/.github/workflows/label-prs.yml@512158c4e90e42eef8aa7fc3fc3186a79b5b4648
