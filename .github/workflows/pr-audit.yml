@@ -21,7 +21,6 @@ jobs:
       contents: read
     uses: tempoxyz/gh-actions/.github/workflows/pr-audit.yml@512158c4e90e42eef8aa7fc3fc3186a79b5b4648
     with:
-      environment: pr-audit
       required-labels: |
         cyclops
         agentic-audit
@@ -41,7 +40,6 @@ jobs:
         startsWith(github.event.comment.body, 'derek audit')
       )
     runs-on: ubuntu-latest
-    environment: pr-audit
     permissions:
       contents: read
       issues: write

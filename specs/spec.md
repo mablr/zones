@@ -19,6 +19,7 @@
     - [Gas Rate Configuration](#gas-rate-configuration)
     - [Encryption Key Management](#encryption-key-management)
     - [Sequencer Transfer](#sequencer-transfer)
+    - [Admin Transfer](#admin-transfer)
   - [Deposits](#deposits)
     - [Regular Deposits](#regular-deposits)
     - [Deposit Fees](#deposit-fees)
@@ -43,6 +44,7 @@
     - [Privacy Modifications](#privacy-modifications)
   - [Tempo State Reads](#tempo-state-reads)
     - [TempoState Predeploy](#tempostate-predeploy)
+    - [Tempo Follower Mode](#tempo-follower-mode)
     - [Header Finalization](#header-finalization)
     - [Storage Reads](#storage-reads)
     - [Staleness and Finality](#staleness-and-finality)
@@ -55,7 +57,6 @@
     - [Method Access Control](#method-access-control)
     - [Block Responses](#block-responses)
     - [Event Filtering](#event-filtering)
-    - [Timing Side Channels](#timing-side-channels)
     - [WebSocket Subscriptions](#websocket-subscriptions)
     - [Zone-Specific Methods](#zone-specific-methods)
     - [Error Codes](#error-codes)
@@ -177,12 +178,15 @@ Each zone has two privileged roles registered on the [`ZonePortal`](#izoneportal
 - Holds governance powers over the zone (token enablement, deposit pause/resume).
 - Expected to be a cold key, multisig, or governance contract.
 - Set at zone creation via [`IZoneFactory.createZone`](#izonefactory).
-- Cannot be renounced. The zero address is never a valid admin.
+- Rotatable via a two-step transfer (see [Admin Transfer](#admin-transfer)), so a lost or compromised admin key can be moved to a new cold key or multisig.
+- Cannot be renounced. 
 
 **Sequencer.**
 
 - Operates the zone: collects transactions, produces blocks, advances Tempo, processes deposits and withdrawals, and submits batches with proofs.
 - Expected to be an online operational key.
+- Rotatable via a two-step transfer. (see [Sequencer Transfer](#sequencer-transfer))
+- Cannot be renounced.
 - Set at zone creation via [`IZoneFactory.createZone`](#izonefactory).
 - Holds the encryption private key used to decrypt [encrypted deposits](#encrypted-deposits).
 
@@ -197,6 +201,10 @@ The following table lists every privileged action and the role authorized to inv
 | `enableToken(token)` | [`ZonePortal`](#izoneportal) | **admin** |
 | `pauseDeposits(token)` | [`ZonePortal`](#izoneportal) | **admin** |
 | `resumeDeposits(token)` | [`ZonePortal`](#izoneportal) | **admin** |
+| `transferAdmin(newAdmin)` | [`ZonePortal`](#izoneportal) | **admin** |
+| `acceptAdmin()` | [`ZonePortal`](#izoneportal) | **pending admin** |
+| `transferSequencer(newSequencer)` | [`ZonePortal`](#izoneportal) | **sequencer** |
+| `acceptSequencer()` | [`ZonePortal`](#izoneportal) | **pending sequencer** |
 | `setZoneGasRate(rate)` | [`ZonePortal`](#izoneportal) | **sequencer** |
 | `setSequencerEncryptionKey(...)` | [`ZonePortal`](#izoneportal) | **sequencer** |
 | `setRpcUrl(url)` | [`ZonePortal`](#izoneportal) | **sequencer** |
@@ -254,15 +262,14 @@ The portal gives the messenger max approval for each enabled token so that withd
 
 ### Zone Predeploys
 
-Each zone has six system contracts deployed at genesis at fixed addresses:
+Each zone has five system contracts deployed at genesis at fixed addresses:
 
 | Predeploy | Address | Purpose |
 |-----------|---------|---------|
-| [`TempoState`](#itempostate) | `0x1c00...0000` | Stores finalized Tempo block headers and provides storage read access to Tempo contracts. |
+| [`TempoState`](#itempostate) | `0x1c00...0000` | Stores the finalized Tempo checkpoint and provides storage read access to Tempo contracts. |
 | [`ZoneInbox`](#izoneinbox) | `0x1c00...0001` | Advances the zone's view of Tempo and processes incoming deposits. Sole mint authority. |
 | [`ZoneOutbox`](#izoneoutbox) | `0x1c00...0002` | Handles withdrawal requests and batch finalization. Sole burn authority. |
 | [`ZoneConfig`](#izoneconfig) | `0x1c00...0003` | Central configuration. Reads the sequencer address and token registry from Tempo via `TempoState`. |
-| `TempoStateReader` | `0x1c00...0004` | Precompile stub for reading Tempo L1 storage. Actual reads are performed by the zone node and validated against the `tempoStateRoot`. |
 | `ZoneTxContext` | `0x1c00...0005` | Provides the current transaction hash to system contracts (used by `ZoneOutbox` for `senderTag` computation). |
 
 `ZoneConfig` reads the sequencer address and token registry from the portal on Tempo via `TempoState` storage reads, making Tempo the single source of truth for zone configuration. See [Tempo State Reads](#tempo-state-reads) for details.
@@ -319,10 +326,19 @@ When a new key is set, the previous key remains valid for `ENCRYPTION_KEY_GRACE_
 
 The sequencer can transfer control to a new address via a two-step process on Tempo:
 
-1. Current sequencer calls `ZonePortal.transferSequencer(newSequencer)` to nominate a new sequencer.
+1. Current sequencer calls `ZonePortal.transferSequencer(newSequencer)` to nominate a new sequencer. Calling it with `address(0)` cancels a pending transfer.
 2. New sequencer calls `ZonePortal.acceptSequencer()` to accept the transfer.
 
 Sequencer management happens exclusively on Tempo. Zone-side contracts read the sequencer address from the portal via `ZoneConfig`, so the transfer takes effect on the zone once `advanceTempo` imports the Tempo block containing the accepted transfer. The two-step pattern prevents accidental transfers to incorrect addresses.
+
+### Admin Transfer
+
+The admin can transfer the governance role to a new address via the same two-step process, allowing an operator to rotate to a new cold key or multisig after a planned governance change or a suspected key compromise:
+
+1. Current admin calls `ZonePortal.transferAdmin(newAdmin)` to nominate a new admin. Calling it with `address(0)` cancels a pending transfer.
+2. New admin calls `ZonePortal.acceptAdmin()` to accept the transfer.
+
+Until `acceptAdmin()` is called the current admin retains all governance powers, so a nomination to a wrong or unreachable address cannot strand the role. Because only a non-zero pending admin can accept, the transfer can never set the admin to `address(0)` — the admin still cannot be renounced.
 
 <br>
 
@@ -764,15 +780,21 @@ The zone reads all of its configuration from Tempo: the sequencer address, the t
 
 ### TempoState Predeploy
 
-`TempoState` is deployed at `0x1c00000000000000000000000000000000000000`. It stores finalized Tempo block header fields and provides storage read access to Tempo contracts.
+`TempoState` is deployed at `0x1c00000000000000000000000000000000000000`. It stores the finalized Tempo checkpoint and provides storage read access to Tempo contracts.
 
-The predeploy exposes Tempo wrapper fields (`generalGasLimit`, `sharedGasLimit`) and selected inner Ethereum header fields (`parentHash`, `beneficiary`, `stateRoot`, `blockNumber`, `timestamp`, etc.). The `tempoBlockHash` is always `keccak256(RLP(TempoHeader))`, committing to the complete header contents even though only a subset of fields are stored.
+The durable onchain checkpoint is `tempoBlockHash` and `tempoBlockNumber`. The `tempoBlockHash` is always `keccak256(RLP(TempoHeader))`, committing to the complete header contents without persisting every decoded header field.
 
 Tempo headers are RLP-encoded as `rlp([general_gas_limit, shared_gas_limit, timestamp_millis_part, inner])`, where `inner` is a standard Ethereum header.
 
+### Tempo Follower Mode
+
+Zone sequencers MUST run their Tempo L1 provider in Tempo follower mode with consensus certification enabled. The follower stack syncs finalized Tempo consensus state from an upstream node and drives the execution layer from those finalized certificates.
+
+Sequencers MUST NOT use uncertified follow mode (`--follow.nocertify`) or a generic execution-only RPC as the source for `advanceTempo` headers or Tempo state reads. Certified follower mode is required so the zone only imports Tempo headers that have reached deterministic finality; this prevents zone proofs from anchoring deposits, token configuration, sequencer rotation, or TIP-403 policy reads to state that could be reorged.
+
 ### Header Finalization
 
-`ZoneInbox.advanceTempo()` calls `TempoState.finalizeTempo(header)` to advance the zone's view of Tempo. This function decodes the RLP header, validates chain continuity (parent hash must match the previous finalized header, block number must increment by one), and stores the header fields.
+`ZoneInbox.advanceTempo()` calls `TempoState.finalizeTempo(header)` to advance the zone's view of Tempo. This function decodes the RLP header, validates chain continuity (parent hash must match the previous finalized header, block number must increment by one), stores the new checkpoint, and emits the decoded state root in `TempoBlockFinalized`.
 
 If a block omits `advanceTempo`, the Tempo binding carries forward from the previous block. Multiple blocks can share the same Tempo binding.
 
@@ -780,7 +802,7 @@ If a block omits `advanceTempo`, the Tempo binding carries forward from the prev
 
 `TempoState` provides `readTempoStorageSlot(account, slot)` for reading storage from any Tempo contract. This function is restricted to zone system contracts (`ZoneInbox`, `ZoneOutbox`, `ZoneConfig`). User transactions cannot call it.
 
-The function is a precompile stub. The actual storage reads are performed by the zone node and validated against the `tempoStateRoot` from the finalized header. The prover includes Merkle proofs for each unique account and storage slot accessed by system contracts during the batch.
+The native precompile resolves the read through the zone node's Tempo L1 provider at the currently finalized `tempoBlockNumber`. The prover validates these reads against the Tempo state root from the corresponding finalized header witness. The prover includes Merkle proofs for each unique account and storage slot accessed by system contracts during the batch.
 
 Current callers:
 
@@ -872,6 +894,8 @@ The RPC uses a default-deny model. Any method not explicitly listed returns `-32
 
 **Disabled.** Methods not available on zones. `eth_getProof` leaks trie structure. `eth_newPendingTransactionFilter` and `eth_subscribe("newPendingTransactions")` enable mempool observation. Uncle query methods (`eth_getUncleByBlockNumberAndIndex`, `eth_getUncleByBlockHashAndIndex`) and mining methods (`eth_mining`, `eth_hashrate`, `eth_getWork`, `eth_submitWork`, `eth_submitHashrate`) do not apply to zones.
 
+**Note on timing side channel attacks:** Scoped methods returning empty values could technically be timed to estimate if the values exist. However, (1) Benchmarked timing differences are very small and (2) The values like `transactionHash` etc... can't be correlated to actual user data, so any leaked signal is not material.
+
 ### Block Responses
 
 For non-sequencer callers, block responses are modified:
@@ -909,11 +933,6 @@ To avoid leaking how much activity occurred in a block, some fields of returned 
 - `transactionIndex` is set to `0` on every log, so the caller cannot infer its transaction's position among, or the number of, other transactions in the block.
 - `logIndex` is renumbered per transaction rather than exposing the log's global position in the block. `(transactionHash, logIndex)` is stable and consistent for a given log across `eth_getLogs`, `eth_getFilterLogs`, `eth_getFilterChanges`, `eth_getTransactionReceipt`, and `eth_subscribe("logs")`.
 
-### Timing Side Channels
-
-Scoped methods that fetch data before checking authorization leak existence via timing differences. The RPC server enforces a minimum response time of 100ms on `eth_getTransactionByHash`, `eth_getTransactionReceipt`, `eth_getLogs`, `eth_getFilterLogs`, and `eth_getFilterChanges`.
-
-Methods where authorization is checked before any data fetch (`eth_getBalance`, `eth_call`, `eth_sendRawTransaction`) do not need the speed bump.
 
 ### WebSocket Subscriptions
 
@@ -1280,7 +1299,7 @@ The stateless execution function must reject the witness on any failed check, mi
    Require `block.parent_hash == prev_block_hash`. Require `block.number == prev_header.number + 1`. Require `block.timestamp >= prev_header.timestamp`. Require `block.beneficiary == public_inputs.sequencer`. Require `finalize_withdrawal_batch_count` to be absent in intermediate blocks and present in the final block of the batch. If `tempo_header_rlp` is absent, require `deposits`, `decryptions`, and `enabled_tokens` to be empty. If `finalize_withdrawal_batch_count` is absent, require `finalize_withdrawal_batch_encrypted_senders` to be empty. If it is present, require the encrypted-sender array length to equal `count`.
 
 5. **Execute `advanceTempo` if the block imports a Tempo header.**
-   If `tempo_header_rlp` is present, call `TempoState.finalizeTempo(header)` in the modeled execution environment. This validates header continuity, updates the bound `tempoBlockNumber`, `tempoBlockHash`, and `tempoStateRoot`, and make the new Tempo root available for subsequent `TempoState.readTempoStorageSlot` calls in this block. Require the finalized `tempoBlockHash` to equal `keccak256(tempo_header_rlp)`.
+   If `tempo_header_rlp` is present, call `TempoState.finalizeTempo(header)` in the modeled execution environment. This validates header continuity, updates the bound `tempoBlockNumber` and `tempoBlockHash`, and makes the imported header's state root available for subsequent `TempoState.readTempoStorageSlot` calls in this block. Require the finalized `tempoBlockHash` to equal `keccak256(tempo_header_rlp)`.
 
 6. **Process deposits and encrypted deposit decryptions inside `advanceTempo`.**
    Using the now-bound Tempo root for this block, verify the Tempo-side reads needed by `ZoneInbox` such as the portal's current deposit queue hash. Execute `ZoneInbox.advanceTempo(header, deposits, decryptions, enabledTokens)` using `enabled_tokens` in the exact witness order; this order is part of the system transaction calldata and therefore affects the transaction root, receipts/logs root, and resulting state transition. Process the `deposits` in witness order, enforcing the queue semantics specified in [Deposit Queue](#deposit-queue). For encrypted deposits, verify the supplied `DecryptionData` and Chaum-Pedersen proof, decode the recipient and memo when AES-GCM decryption succeeds, and enqueue a bounce-back when proof verification, AES-GCM authentication, plaintext length validation, or the decrypted-recipient mint fails as specified in [Onchain Decryption Verification](#onchain-decryption-verification).
@@ -1305,12 +1324,12 @@ The stateless execution function must reject the witness on any failed check, mi
 
 ### Tempo State Proofs
 
-System contracts read Tempo state during execution (deposit queue hash, sequencer address, token registry, TIP-403 policies). `BatchStateProof` applies the [shared trie proof format](#shared-trie-proof-format) to the Tempo root currently bound in `TempoState` at the moment of each read. If `advanceTempo()` runs during the batch, later reads are therefore verified against the newer Tempo root, not the root from the start of the batch. The witness includes a `BatchStateProof` containing:
+System contracts read Tempo state during execution (deposit queue hash, sequencer address, token registry, TIP-403 policies). `BatchStateProof` applies the [shared trie proof format](#shared-trie-proof-format) to the Tempo root from the header currently bound by `TempoState` at the moment of each read. If `advanceTempo()` runs during the batch, later reads are therefore verified against the newer Tempo root, not the root from the start of the batch. The witness includes a `BatchStateProof` containing:
 
 - A deduplicated `node_pool` of MPT nodes, keyed by `keccak256(rlp(node))`. Each node is verified exactly once.
 - A list of `L1StateRead` entries, each specifying the zone block index, Tempo block number, account, storage slot, and expected value.
 
-Reads are indexed and verified on demand during execution. Each `L1StateRead` is additionally tagged with `zone_block_index` and `tempo_block_number` so the prover can bind that read to the correct in-batch `TempoState`. The proof shape is the same as `ZoneStateWitness`; the difference is timing. `ZoneStateWitness` is verified once against the initial zone-state root at batch start, while `BatchStateProof` reads are verified against the Tempo root currently bound in `TempoState` at the moment of each read.
+Reads are indexed and verified on demand during execution. Each `L1StateRead` is additionally tagged with `zone_block_index` and `tempo_block_number` so the prover can bind that read to the correct in-batch Tempo checkpoint. The proof shape is the same as `ZoneStateWitness`; the difference is timing. `ZoneStateWitness` is verified once against the initial zone-state root at batch start, while `BatchStateProof` reads are verified against the Tempo root bound by the active Tempo checkpoint at the moment of each read.
 
 Anchor validation ensures the zone's view of Tempo is correct. If `anchor_block_number` equals `tempo_block_number`, the zone's `tempoBlockHash` must match `anchor_block_hash` directly. If `anchor_block_number` is greater (for zones that have been offline longer than the EIP-2935 window), the proof verifies the parent-hash chain from `tempo_block_number` to `anchor_block_number` using the ancestry headers in the witness.
 
@@ -1649,6 +1668,8 @@ interface IZonePortal {
     event RefundClaimed(address indexed recipient, address indexed token, uint128 amount);
     event SequencerTransferStarted(address indexed currentSequencer, address indexed pendingSequencer);
     event SequencerTransferred(address indexed previousSequencer, address indexed newSequencer);
+    event AdminTransferStarted(address indexed currentAdmin, address indexed pendingAdmin);
+    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
     event SequencerEncryptionKeyUpdated(bytes32 x, uint8 yParity, uint256 keyIndex, uint64 activationBlock);
     event ZoneGasRateUpdated(uint128 zoneGasRate);
     event TokenEnabled(address indexed token, string name, string symbol, string currency);
@@ -1658,6 +1679,7 @@ interface IZonePortal {
     error NotSequencer();
     error NotAdmin();
     error NotPendingSequencer();
+    error NotPendingAdmin();
     error InvalidProof();
     error InvalidTempoBlockNumber();
     error CallbackRejected();
@@ -1740,6 +1762,11 @@ interface IZonePortal {
     // Sequencer management
     function transferSequencer(address newSequencer) external;
     function acceptSequencer() external;
+
+    // Admin management
+    function transferAdmin(address newAdmin) external;
+    function acceptAdmin() external;
+
     function setZoneGasRate(uint128 _zoneGasRate) external;
     function zoneGasRate() external view returns (uint128);
 
@@ -1759,6 +1786,7 @@ interface IZonePortal {
     function sequencer() external view returns (address);
     function admin() external view returns (address);
     function pendingSequencer() external view returns (address);
+    function pendingAdmin() external view returns (address);
     
     function verifier() external view returns (address);
     function blockHash() external view returns (bytes32);
@@ -1807,8 +1835,6 @@ interface ITempoState {
 
     function tempoBlockHash() external view returns (bytes32);
     function tempoBlockNumber() external view returns (uint64);
-    function tempoStateRoot() external view returns (bytes32);
-    function tempoTimestamp() external view returns (uint64);
 
     function finalizeTempo(bytes calldata header) external;
     function readTempoStorageSlot(address account, bytes32 slot) external view returns (bytes32);

@@ -265,41 +265,6 @@ interface IAesGcmDecrypt {
 
 }
 
-/// @title ITempoStateReader
-/// @notice Standalone precompile for reading Tempo L1 contract storage at a given block height
-/// @dev Predeploy at 0x1c00000000000000000000000000000000000004
-interface ITempoStateReader {
-
-    /// @notice Read a single storage slot from a Tempo L1 contract
-    /// @param account The Tempo L1 contract address
-    /// @param slot The storage slot to read
-    /// @param blockNumber The L1 block number to query
-    /// @return value The storage value
-    function readStorageAt(
-        address account,
-        bytes32 slot,
-        uint64 blockNumber
-    )
-        external
-        view
-        returns (bytes32);
-
-    /// @notice Read multiple storage slots from a Tempo L1 contract
-    /// @param account The Tempo L1 contract address
-    /// @param slots The storage slots to read
-    /// @param blockNumber The L1 block number to query
-    /// @return values The storage values
-    function readStorageBatchAt(
-        address account,
-        bytes32[] calldata slots,
-        uint64 blockNumber
-    )
-        external
-        view
-        returns (bytes32[] memory);
-
-}
-
 // Maximum callback gas a withdrawal may request.
 // The processor adds fixed overhead plus an EIP-150 cushion, so this value
 // keeps the outer `processWithdrawal` transaction well below a 30M gas L1 block
@@ -349,9 +314,6 @@ address constant ZONE_OUTBOX = 0x1c00000000000000000000000000000000000002;
 // ZoneConfig system contract address (0x1c00...0003)
 address constant ZONE_CONFIG = 0x1c00000000000000000000000000000000000003;
 
-// TempoStateReader precompile address (0x1c00...0004)
-address constant TEMPO_STATE_READER = 0x1c00000000000000000000000000000000000004;
-
 // ZoneTxContext precompile address (0x1c00...0005)
 address constant ZONE_TX_CONTEXT = 0x1C00000000000000000000000000000000000005;
 
@@ -384,6 +346,7 @@ interface IZoneTxContext {
 //   slot 12: _withdrawalQueue.tail
 //   slot 13: _withdrawalQueue.slots (mapping(uint256 => bytes32))
 //   slot 14: rpcUrl (string)
+//   slot 15: pendingAdmin (address)
 //
 // These constants are the single source of truth for cross-domain reads.
 // ZoneConfig and ZoneInbox use them to read portal state via
@@ -396,6 +359,7 @@ bytes32 constant PORTAL_CURRENT_DEPOSIT_QUEUE_HASH_SLOT = bytes32(uint256(5));
 bytes32 constant PORTAL_ENCRYPTION_KEYS_SLOT = bytes32(uint256(7));
 bytes32 constant PORTAL_TOKEN_CONFIGS_SLOT = bytes32(uint256(8));
 bytes32 constant PORTAL_ENABLED_TOKENS_SLOT = bytes32(uint256(9));
+bytes32 constant PORTAL_PENDING_ADMIN_SLOT = bytes32(uint256(15));
 
 /// @title IVerifier
 /// @notice Interface for zone proof/attestation verification
@@ -554,10 +518,19 @@ interface IZonePortal {
         uint64 depositNumber
     );
 
+    /// @notice Emitted when the current sequencer nominates a new sequencer (two-step transfer).
+    /// @dev A `pendingSequencer` of address(0) signals cancellation of a pending transfer.
     event SequencerTransferStarted(
         address indexed currentSequencer, address indexed pendingSequencer
     );
+    /// @notice Emitted when a pending sequencer accepts and the sequencer role is handed over.
     event SequencerTransferred(address indexed previousSequencer, address indexed newSequencer);
+
+    /// @notice Emitted when the current admin nominates a new admin (two-step transfer).
+    /// @dev A `newAdmin` of address(0) signals cancellation of a pending transfer.
+    event AdminTransferStarted(address indexed currentAdmin, address indexed pendingAdmin);
+    /// @notice Emitted when a pending admin accepts and the admin role is handed over.
+    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
 
     /// @notice Emitted when an encrypted deposit is made (recipient/memo not revealed)
     event EncryptedDepositMade(
@@ -612,6 +585,7 @@ interface IZonePortal {
     error NotSequencer();
     error NotAdmin();
     error NotPendingSequencer();
+    error NotPendingAdmin();
     error InvalidProof();
     error InvalidTempoBlockNumber();
     error CallbackRejected();
@@ -651,6 +625,8 @@ interface IZonePortal {
     function admin() external view returns (address);
 
     function pendingSequencer() external view returns (address);
+
+    function pendingAdmin() external view returns (address);
 
     function zoneGasRate() external view returns (uint128);
 
@@ -717,6 +693,13 @@ interface IZonePortal {
 
     /// @notice Accept a pending sequencer transfer. Only callable by pending sequencer.
     function acceptSequencer() external;
+
+    /// @notice Start an admin transfer. Only callable by the current admin.
+    /// @param newAdmin The address that will become admin after accepting (address(0) cancels).
+    function transferAdmin(address newAdmin) external;
+
+    /// @notice Accept a pending admin transfer. Only callable by the pending admin.
+    function acceptAdmin() external;
 
     /// @notice Get the sequencer's current encryption public key for encrypted deposits
     /// @return x The X coordinate of the secp256k1 public key
@@ -899,33 +882,8 @@ interface ITempoState {
     /// @notice Current finalized Tempo block hash (keccak256 of RLP-encoded header)
     function tempoBlockHash() external view returns (bytes32);
 
-    // Tempo wrapper fields
-    function generalGasLimit() external view returns (uint64);
-
-    function sharedGasLimit() external view returns (uint64);
-
-    // Inner Ethereum header fields
-    function tempoParentHash() external view returns (bytes32);
-
-    function tempoBeneficiary() external view returns (address);
-
-    function tempoStateRoot() external view returns (bytes32);
-
-    function tempoTransactionsRoot() external view returns (bytes32);
-
-    function tempoReceiptsRoot() external view returns (bytes32);
-
+    /// @notice Current finalized Tempo block number
     function tempoBlockNumber() external view returns (uint64);
-
-    function tempoGasLimit() external view returns (uint64);
-
-    function tempoGasUsed() external view returns (uint64);
-
-    function tempoTimestamp() external view returns (uint64);
-
-    function tempoTimestampMillis() external view returns (uint64);
-
-    function tempoPrevRandao() external view returns (bytes32);
 
     /// @notice Finalize a Tempo block header. Only callable by ZoneInbox.
     /// @dev Validates chain continuity (parent hash must match, number must be +1).
@@ -1120,6 +1078,12 @@ interface IZoneOutbox {
     /// @notice Number of pending withdrawals
     function pendingWithdrawalsCount() external view returns (uint256);
 
+    /// @notice Pending withdrawals waiting to be finalized
+    function getPendingWithdrawals() external view returns (PendingWithdrawal[] memory);
+
+    /// @notice Timestamp of the latest withdrawal batch finalization
+    function lastFinalizedTimestamp() external view returns (uint64);
+
     /// @notice Maximum number of withdrawal requests per zone block (0 = unlimited)
     function maxWithdrawalsPerBlock() external view returns (uint256);
 
@@ -1161,9 +1125,10 @@ interface IZoneOutbox {
         external;
 
     /// @notice Finalize batch at end of block - build withdrawal hash and write to state
-    /// @dev Only callable by sequencer. Required per batch (count may be 0).
+    /// @dev Only callable by sequencer. Required per batch. `count` must equal
+    ///      the current pending withdrawal count (including 0 for an empty batch).
     ///      Writes withdrawal batch parameters to lastBatch storage for proof access.
-    /// @param count Max number of withdrawals to process
+    /// @param count The number of pending withdrawals to process
     /// @return withdrawalQueueHash The hash chain (0 if no withdrawals)
     function finalizeWithdrawalBatch(
         uint256 count,

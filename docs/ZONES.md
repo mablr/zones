@@ -535,7 +535,7 @@ Zones inherit the Tempo L1 EVM but replace, disable, or pass through each precom
 | Contract | Address |
 |----------|---------|
 | pathUSD (TIP-20) | `0x20C0000000000000000000000000000000000000` |
-| ZoneFactory (moderato) | `0xcDf1101C60B34Cc5205BB27C88F02Db36A373C68` |
+| ZoneFactory (moderato) | `0xC63EF0DbaB04b0242C2898AaF0BeF81f8f9cA7c5` |
 
 The xtasks use this Moderato `ZoneFactory` as their built-in default: `create-zone` and `zone-info` point at it automatically, and `deploy-router` uses `zoneFactory` from `zone.json` before falling back to this address. Pass `--zone-factory` or set `ZONE_FACTORY` to override it.
 
@@ -570,16 +570,16 @@ Current deployment:
 
 | Field | Value |
 |-------|-------|
-| Address | `0xcDf1101C60B34Cc5205BB27C88F02Db36A373C68` |
-| Transaction | `0xb3d519f55fd6b0b349b3f118d8966edf3e20f2cc1d1ca24df60c333a23f4e1cf` |
-| Block | `24532374` |
-| Deployed | `2026-06-30 19:22:56 UTC` |
+| Address | `0xC63EF0DbaB04b0242C2898AaF0BeF81f8f9cA7c5` |
+| Transaction | `0x3d3f0f4ec21084d8fda0c315cfe19c92568df3320c20a56679a12935547c2c4c` |
+| Block | `25403236` |
+| Deployed | `2026-07-06 20:41:32 UTC` |
 
 ### Zone Node CLI Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--l1.rpc-url` | (required) | L1 WebSocket RPC URL |
+| `--l1.rpc-url` | (required) | Certified Tempo follower WebSocket RPC URL |
 | `--l1.portal-address` | (from zone.json) | ZonePortal contract on L1 |
 | `--l1.genesis-block-number` | (from zone.json) | L1 block when the zone was created |
 | `--zone.id` | 0 | Zone ID from ZoneFactory (for private RPC auth). The zone's chain ID is derived as `421700000 + (zone_id % 1002610000)` (mainnet) or `1424310000 + (zone_id % 723173648)` (testnet). |
@@ -597,7 +597,7 @@ Current deployment:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `L1_RPC_URL` | Yes | L1 WebSocket URL (`wss://...`) |
+| `L1_RPC_URL` | Yes | Certified Tempo follower WebSocket RPC URL (`wss://...`) |
 | `SEQUENCER_KEY` | For sequencing | Sequencer private key |
 | `ADMIN_KEY` | For portal governance | Portal admin private key for `enableToken` / deposit pause controls. `SEQUENCER_KEY` only works for legacy zones where admin == sequencer. |
 | `PRIVATE_KEY` | For transactions | Key for L1 transactions (deposits, approvals) |

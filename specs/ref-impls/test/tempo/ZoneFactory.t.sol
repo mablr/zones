@@ -2,9 +2,9 @@
 pragma solidity ^0.8.13;
 
 import { IZoneFactory, ZoneInfo, ZoneParams } from "../../src/interfaces/IZone.sol";
-import { ZoneFactory } from "../../src/l1/ZoneFactory.sol";
-import { ZoneMessenger } from "../../src/l1/ZoneMessenger.sol";
-import { ZonePortal } from "../../src/l1/ZonePortal.sol";
+import { ZoneFactory } from "../../src/tempo/ZoneFactory.sol";
+import { ZoneMessenger } from "../../src/tempo/ZoneMessenger.sol";
+import { ZonePortal } from "../../src/tempo/ZonePortal.sol";
 import { BaseTest } from "../BaseTest.t.sol";
 import { Vm } from "forge-std/Vm.sol";
 import { ITIP20 } from "tempo-std/interfaces/ITIP20.sol";
@@ -411,6 +411,19 @@ contract ZoneFactoryTest is BaseTest {
 
         assertEq(ZonePortal(portal).sequencer(), nextSequencer); // portal: current
         assertEq(zoneFactory.zones(id).sequencer, sequencer); // factory: snapshot at creation
+    }
+
+    // Factory ZoneInfo.admin is likewise a snapshot; the portal admin can rotate via the
+    // two-step transfer while the factory record still reflects the creation-time admin.
+    function test_zones_adminIsSnapshot_afterRotation() public {
+        (uint32 id, address portal) = zoneFactory.createZone(_defaultParams());
+        vm.prank(admin);
+        ZonePortal(portal).transferAdmin(alice);
+        vm.prank(alice);
+        ZonePortal(portal).acceptAdmin();
+
+        assertEq(ZonePortal(portal).admin(), alice); // portal: current
+        assertEq(zoneFactory.zones(id).admin, admin); // factory: snapshot at creation
     }
 
     /*//////////////////////////////////////////////////////////////

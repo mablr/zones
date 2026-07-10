@@ -27,14 +27,14 @@ import {
     ZONE_OUTBOX,
     ZoneParams
 } from "../../src/interfaces/IZone.sol";
-import { ZoneFactory } from "../../src/l1/ZoneFactory.sol";
-import { ZoneMessenger } from "../../src/l1/ZoneMessenger.sol";
-import { ZonePortal } from "../../src/l1/ZonePortal.sol";
 import { EncryptedDepositLib } from "../../src/libraries/EncryptedDeposit.sol";
 import { EMPTY_SENTINEL } from "../../src/libraries/WithdrawalQueueLib.sol";
-import { ZoneConfig } from "../../src/predeploys/ZoneConfig.sol";
-import { ZoneInbox } from "../../src/predeploys/ZoneInbox.sol";
-import { ZoneOutbox } from "../../src/predeploys/ZoneOutbox.sol";
+import { ZoneFactory } from "../../src/tempo/ZoneFactory.sol";
+import { ZoneMessenger } from "../../src/tempo/ZoneMessenger.sol";
+import { ZonePortal } from "../../src/tempo/ZonePortal.sol";
+import { ZoneConfig } from "../../src/zone/ZoneConfig.sol";
+import { ZoneInbox } from "../../src/zone/ZoneInbox.sol";
+import { ZoneOutbox } from "../../src/zone/ZoneOutbox.sol";
 import { BaseTest } from "../BaseTest.t.sol";
 import { MockTempoState } from "../mocks/MockTempoState.sol";
 import { MockZoneToken } from "../mocks/MockZoneToken.sol";
@@ -231,14 +231,13 @@ contract ZoneBridgeTest is BaseTest {
         view
         returns (bytes[] memory encryptedSenders)
     {
-        uint256 pending = l2Outbox.pendingWithdrawalsCount();
-        if (count > pending) {
-            count = pending;
-        }
         encryptedSenders = new bytes[](count);
     }
 
     function _finalizeWithdrawalBatch(uint256 count) internal returns (bytes32) {
+        if (count == type(uint256).max) {
+            count = l2Outbox.pendingWithdrawalsCount();
+        }
         vm.startPrank(sequencer);
         bytes32 hash = l2Outbox.finalizeWithdrawalBatch(
             count, uint64(block.number), _emptyEncryptedSenders(count)

@@ -41,6 +41,7 @@ use zone_l1::{
     Deposit, DepositQueue, EnabledToken, EncryptedDeposit, L1Deposit, L1PortalEvents, L1StateCache,
 };
 use zone_node::ZoneNode;
+use zone_precompiles::tempo_state::slots;
 
 #[path = "../../../rpc/test-utils/auth_tokens.rs"]
 mod auth_tokens;
@@ -235,7 +236,7 @@ where
 /// Wraps an in-process reth node configured as a Zone, providing:
 /// - An HTTP RPC endpoint for provider connections
 /// - A [`DepositQueue`] handle for injecting synthetic L1 blocks
-/// - A [`L1StateCache`] for seeding TempoStateReader precompile data
+/// - A [`L1StateCache`] for seeding TempoState storage-read data
 ///
 /// # Construction
 ///
@@ -541,7 +542,7 @@ impl ZoneTestNode {
     /// The L1Subscriber retries a dummy URL in the background, but the
     /// ZoneEngine is fully functional. Deposits and L1 headers are injected
     /// directly into the `deposit_queue`; the L1 state cache must be seeded
-    /// via [`L1Fixture::seed_l1_cache`] for TempoStateReader precompile reads.
+    /// via [`L1Fixture::seed_l1_cache`] for TempoState storage reads.
     pub(crate) async fn start_local() -> eyre::Result<Self> {
         Self::launch(
             DUMMY_L1_URL.to_string(),
@@ -1817,17 +1818,13 @@ fn build_l1_anchored_genesis_from_header(
         .storage
         .get_or_insert_with(Default::default);
 
-    // Slot 0 = tempoBlockHash
-    storage.insert(B256::ZERO, l1_genesis_hash);
-
-    // Slot 7 = packed (tempoBlockNumber:u64 | tempoGasLimit:u64 | tempoGasUsed:u64 | tempoTimestamp:u64)
-    let new_slot7: U256 = U256::from(l1_header.inner.number)
-        | (U256::from(l1_header.inner.gas_limit) << 64)
-        | (U256::from(l1_header.inner.gas_used) << 128)
-        | (U256::from(l1_header.inner.timestamp) << 192);
     storage.insert(
-        B256::from(U256::from(7).to_be_bytes()),
-        B256::from(new_slot7.to_be_bytes()),
+        B256::from(slots::TEMPO_BLOCK_HASH.to_be_bytes()),
+        l1_genesis_hash,
+    );
+    storage.insert(
+        B256::from(slots::TEMPO_BLOCK_NUMBER.to_be_bytes()),
+        B256::from(U256::from(l1_header.inner.number).to_be_bytes()),
     );
 
     // --- Patch 2: Portal address immutables in ZoneInbox and ZoneConfig ---
@@ -3149,10 +3146,10 @@ impl L1Fixture {
     }
 
     /// Pre-populate the L1 state cache with values that `advanceTempo` will read
-    /// via the TempoStateReader precompile.
+    /// via the TempoState precompile.
     ///
     /// Without a real L1, the precompile would fail with a hard error on cache miss.
-    /// This seeds the cache so that `readStorageAt(portal, slot, blockNumber)` succeeds
+    /// This seeds the cache so that `readTempoStorageSlot(portal, slot)` succeeds
     /// for each block we plan to inject.
     pub(crate) fn seed_l1_cache(
         &self,
