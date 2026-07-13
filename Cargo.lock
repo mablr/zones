@@ -13265,6 +13265,7 @@ dependencies = [
  "tracing",
  "zone-l1",
  "zone-precompiles",
+ "zone-primitives",
 ]
 
 [[package]]
@@ -13498,6 +13499,7 @@ dependencies = [
  "tokio-tungstenite 0.28.0",
  "tracing",
  "url",
+ "zone-primitives",
 ]
 
 [[package]]
